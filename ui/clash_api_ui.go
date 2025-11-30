@@ -67,8 +67,8 @@ func CreateClashAPIContent(ac *core.AppController) fyne.CanvasObject {
 					return
 				}
 
-				ac.ProxiesList = proxies
-				ac.ActiveProxyName = now
+				ac.SetProxiesList(proxies)
+				ac.SetActiveProxyName(now)
 
 				if ac.ProxiesListWidget != nil {
 					ac.ProxiesListWidget.Refresh()
@@ -103,9 +103,9 @@ func CreateClashAPIContent(ac *core.AppController) fyne.CanvasObject {
 
 	onResetAPIState := func() {
 		log.Println("clash_api_ui: Resetting API state.")
-		ac.ProxiesList = []api.ProxyInfo{}
-		ac.ActiveProxyName = ""
-		ac.SelectedIndex = -1
+		ac.SetProxiesList([]api.ProxyInfo{})
+		ac.SetActiveProxyName("")
+		ac.SetSelectedIndex(-1)
 		if ac.ApiStatusLabel != nil {
 			ac.ApiStatusLabel.SetText("Status: Not running")
 		}
@@ -163,7 +163,11 @@ func CreateClashAPIContent(ac *core.AppController) fyne.CanvasObject {
 	}
 
 	updateItem := func(id int, o fyne.CanvasObject) {
-		proxyInfo := ac.ProxiesList[id]
+		proxies := ac.GetProxiesList()
+		if id < 0 || id >= len(proxies) {
+			return
+		}
+		proxyInfo := proxies[id]
 
 		stack := o.(*fyne.Container)
 		background := stack.Objects[0].(*canvas.Rectangle)
@@ -184,9 +188,9 @@ func CreateClashAPIContent(ac *core.AppController) fyne.CanvasObject {
 		}
 
 		// Обновляем фон
-		if proxyInfo.Name == ac.ActiveProxyName {
+		if proxyInfo.Name == ac.GetActiveProxyName() {
 			background.FillColor = color.NRGBA{R: 144, G: 238, B: 144, A: 128}
-		} else if id == ac.SelectedIndex {
+		} else if id == ac.GetSelectedIndex() {
 			background.FillColor = color.Gray{0xDD}
 		} else {
 			background.FillColor = color.Transparent
@@ -214,7 +218,7 @@ func CreateClashAPIContent(ac *core.AppController) fyne.CanvasObject {
 						status.SetText("Switch error: " + err.Error())
 					} else {
 						// 1. Обновляем состояние в контроллере
-						ac.ActiveProxyName = proxyNameForCallback
+						ac.SetActiveProxyName(proxyNameForCallback)
 						// 2. Перерисовываем список для обновления выделения
 						ac.ProxiesListWidget.Refresh()
 						// 3. Сразу запускаем пинг для этого прокси
@@ -229,14 +233,17 @@ func CreateClashAPIContent(ac *core.AppController) fyne.CanvasObject {
 	}
 
 	proxiesListWidget := widget.NewList(
-		func() int { return len(ac.ProxiesList) },
+		func() int { return len(ac.GetProxiesList()) },
 		createItem,
 		updateItem,
 	)
 
 	proxiesListWidget.OnSelected = func(id int) {
-		ac.SelectedIndex = id
-		status.SetText("Selected: " + ac.ProxiesList[id].Name)
+		ac.SetSelectedIndex(id)
+		proxies := ac.GetProxiesList()
+		if id >= 0 && id < len(proxies) {
+			status.SetText("Selected: " + proxies[id].Name)
+		}
 		proxiesListWidget.Refresh()
 	}
 

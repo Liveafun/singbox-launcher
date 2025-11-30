@@ -65,9 +65,11 @@ type AppController struct {
 	// --- Process State ---
 	SingboxCmd               *exec.Cmd
 	CmdMutex                 sync.Mutex
+	ParserMutex              sync.Mutex // Mutex for ParserRunning
 	ParserRunning            bool
 	StoppedByUser            bool
 	ConsecutiveCrashAttempts int
+	APIStateMutex            sync.RWMutex // Mutex for API-related fields (ProxiesList, ActiveProxyName, SelectedIndex)
 
 	// --- File Paths ---
 	ExecDir     string
@@ -155,7 +157,7 @@ func NewAppController(appIconData, greyIconData, greenIconData []byte) (*AppCont
 	ac.StatusText = binding.NewString()
 	ac.StatusText.Set("❌ Down")
 	ac.RunningState = &RunningState{controller: ac}
-	ac.RunningState.running = false
+	ac.RunningState.Set(false) // Use Set() method instead of direct assignment
 	ac.ConsecutiveCrashAttempts = 0
 
 	if base, tok, err := api.LoadClashAPIConfig(ac.ConfigPath); err != nil {
@@ -169,9 +171,10 @@ func NewAppController(appIconData, greyIconData, greenIconData []byte) (*AppCont
 		ac.ClashAPIEnabled = true
 	}
 
-	ac.ProxiesList = []api.ProxyInfo{}
-	ac.SelectedIndex = -1
-	ac.ActiveProxyName = ""
+	// Initialize API state fields (safe during initialization, but using methods for consistency)
+	ac.SetProxiesList([]api.ProxyInfo{})
+	ac.SetSelectedIndex(-1)
+	ac.SetActiveProxyName("")
 
 	ac.RefreshAPIFunc = func() { log.Println("RefreshAPIFunc handler is not set yet.") }
 	ac.ResetAPIStateFunc = func() { log.Println("ResetAPIStateFunc handler is not set yet.") }
@@ -340,6 +343,51 @@ func (r *RunningState) IsRunning() bool {
 	return r.running
 }
 
+// SetProxiesList safely sets the proxies list with mutex protection.
+func (ac *AppController) SetProxiesList(proxies []api.ProxyInfo) {
+	ac.APIStateMutex.Lock()
+	defer ac.APIStateMutex.Unlock()
+	ac.ProxiesList = proxies
+}
+
+// GetProxiesList safely gets a copy of the proxies list with mutex protection.
+func (ac *AppController) GetProxiesList() []api.ProxyInfo {
+	ac.APIStateMutex.RLock()
+	defer ac.APIStateMutex.RUnlock()
+	// Return a copy to prevent external modifications
+	result := make([]api.ProxyInfo, len(ac.ProxiesList))
+	copy(result, ac.ProxiesList)
+	return result
+}
+
+// SetActiveProxyName safely sets the active proxy name with mutex protection.
+func (ac *AppController) SetActiveProxyName(name string) {
+	ac.APIStateMutex.Lock()
+	defer ac.APIStateMutex.Unlock()
+	ac.ActiveProxyName = name
+}
+
+// GetActiveProxyName safely gets the active proxy name with mutex protection.
+func (ac *AppController) GetActiveProxyName() string {
+	ac.APIStateMutex.RLock()
+	defer ac.APIStateMutex.RUnlock()
+	return ac.ActiveProxyName
+}
+
+// SetSelectedIndex safely sets the selected index with mutex protection.
+func (ac *AppController) SetSelectedIndex(index int) {
+	ac.APIStateMutex.Lock()
+	defer ac.APIStateMutex.Unlock()
+	ac.SelectedIndex = index
+}
+
+// GetSelectedIndex safely gets the selected index with mutex protection.
+func (ac *AppController) GetSelectedIndex() int {
+	ac.APIStateMutex.RLock()
+	defer ac.APIStateMutex.RUnlock()
+	return ac.SelectedIndex
+}
+
 // isSingBoxProcessRunning checks if a sing-box process is currently running on the system.
 func isSingBoxProcessRunning() bool {
 	processes, err := ps.Processes()
@@ -489,16 +537,21 @@ func StopSingBoxProcess(ac *AppController) {
 // RunParserProcess запускает встроенный процесс обновления конфига.
 func RunParserProcess(ac *AppController) {
 	// Проверяем, не запущен ли уже парсинг
+	ac.ParserMutex.Lock()
 	if ac.ParserRunning {
+		ac.ParserMutex.Unlock()
 		ac.ShowAutoHideInfo("Parser Info", "Configuration update is already in progress.")
 		return
 	}
+	ac.ParserRunning = true
+	ac.ParserMutex.Unlock()
 
 	log.Println("RunParser: Starting internal configuration update...")
-	ac.ParserRunning = true
 	// Гарантируем, что флаг сбросится после завершения, даже если будет ошибка
 	defer func() {
+		ac.ParserMutex.Lock()
 		ac.ParserRunning = false
+		ac.ParserMutex.Unlock()
 	}()
 
 	// Вызываем внешний parser для обновления конфигурации

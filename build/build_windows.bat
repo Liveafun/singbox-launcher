@@ -72,7 +72,7 @@ echo Using output file: "%OUTPUT_FILENAME%"
 :: Собираем проект
 echo.
 echo === Starting Build ===
-go build -ldflags="-H windowsgui -s -w" -o "%OUTPUT_FILENAME%"
+go build -buildvcs=false -ldflags="-H windowsgui -s -w" -o "%OUTPUT_FILENAME%"
 
 if %ERRORLEVEL% NEQ 0 (
     echo.

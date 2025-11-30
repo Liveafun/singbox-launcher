@@ -36,7 +36,7 @@ echo "Using output file: $OUTPUT_FILENAME"
 
 echo ""
 echo "=== Starting Build ==="
-go build -ldflags="-s -w" -o "$OUTPUT_FILENAME"
+go build -buildvcs=false -ldflags="-s -w" -o "$OUTPUT_FILENAME"
 
 if [ $? -eq 0 ]; then
     echo ""

@@ -19,7 +19,15 @@ WinTun.dll распространяется под лицензией MIT, чт�
 
 **Источник:** [https://github.com/SagerNet/sing-box](https://github.com/SagerNet/sing-box)  
 **Лицензия:** GPL-3.0  
-**Примечание:** Пользователи должны скачать sing-box самостоятельно из официальных релизов.
+
+### Included third-party binaries
+
+This release includes prebuilt `sing-box.exe` (Windows) / `sing-box` (macOS/Linux) from the official project:
+
+**Официальный репозиторий:** [https://github.com/SagerNet/sing-box](https://github.com/SagerNet/sing-box)  
+**Лицензия:** GPL-3.0
+
+**Примечание:** Если в релизе нет предсобранного бинарника sing-box, пользователи должны скачать его самостоятельно из [официальных релизов sing-box](https://github.com/SagerNet/sing-box/releases).
 
 ## Fyne
 

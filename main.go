@@ -89,6 +89,9 @@ func main() {
 
 	controller.UpdateUI()
 
+	// Check if config.json exists and show a warning if it doesn't
+	core.CheckConfigFileExists(controller)
+
 	// Check if sing-box is running on startup and show a warning if it is.
 	core.CheckIfSingBoxRunningAtStartUtil(controller)
 

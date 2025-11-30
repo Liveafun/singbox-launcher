@@ -24,17 +24,14 @@
 - Windows 10/11 (x64)
 - [sing-box](https://github.com/SagerNet/sing-box/releases) (исполняемый файл)
 - [WinTun](https://www.wintun.net/) (wintun.dll) - лицензия MIT, можно распространять
-- Go 1.24+ (для сборки из исходников)
 
 ### macOS
 - macOS 10.15+ (Catalina или новее)
 - [sing-box](https://github.com/SagerNet/sing-box/releases) (исполняемый файл)
-- Go 1.24+ (для сборки из исходников)
 
 ### Linux
 - Современный дистрибутив Linux (x64)
 - [sing-box](https://github.com/SagerNet/sing-box/releases) (исполняемый файл)
-- Go 1.24+ (для сборки из исходников)
 
 ## 📦 Установка
 
@@ -76,85 +73,6 @@
    chmod +x singbox-launcher
    ./singbox-launcher
    ```
-
-## 🔨 Сборка из исходников
-
-### Предварительные требования
-
-- Go 1.24 или новее
-- Git
-- Для Windows: [rsrc](https://github.com/akavel/rsrc) для встраивания иконок (опционально)
-
-### Windows
-
-**Требования:**
-- Go 1.24 или новее ([скачать](https://go.dev/dl/))
-- **Компилятор C (GCC)** - ОБЯЗАТЕЛЬНО! ([TDM-GCC](https://jmeubank.github.io/tdm-gcc/) или [MinGW-w64](https://www.mingw-w64.org/))
-- CGO (включен по умолчанию)
-- Опционально: `rsrc` для встраивания иконки (`go install github.com/akavel/rsrc@latest`)
-
-**⚠️ Важно:** Если видите ошибку `gcc: executable file not found`, установите GCC (см. [BUILD_WINDOWS.md](BUILD_WINDOWS.md) раздел "Решение проблем")
-
-**Сборка:**
-
-1. Клонируйте репозиторий:
-```batch
-git clone https://github.com/Liveafun/singbox-launcher.git
-cd singbox-launcher
-```
-
-2. Запустите скрипт сборки:
-```batch
-build\build_windows.bat
-```
-
-Или вручную:
-```batch
-go mod tidy
-go build -ldflags="-H windowsgui -s -w" -o singbox-launcher.exe
-```
-
-**Подробная инструкция:** См. [BUILD_WINDOWS.md](BUILD_WINDOWS.md)
-
-### macOS
-
-```bash
-# Клонируйте репозиторий
-git clone https://github.com/Liveafun/singbox-launcher.git
-cd singbox-launcher
-
-# Установите зависимости
-go mod download
-
-# Соберите проект
-chmod +x build/build_darwin.sh
-./build/build_darwin.sh
-```
-
-Или вручную:
-```bash
-GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o singbox-launcher
-```
-
-### Linux
-
-```bash
-# Клонируйте репозиторий
-git clone https://github.com/Liveafun/singbox-launcher.git
-cd singbox-launcher
-
-# Установите зависимости
-go mod download
-
-# Соберите проект
-chmod +x build/build_linux.sh
-./build/build_linux.sh
-```
-
-Или вручную:
-```bash
-GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o singbox-launcher
-```
 
 ## 📖 Использование
 
@@ -545,6 +463,85 @@ sudo ./singbox-launcher
 
 ```bash
 sudo setcap cap_net_admin+ep ./singbox-launcher
+```
+
+## 🔨 Сборка из исходников
+
+### Предварительные требования
+
+- Go 1.24 или новее
+- Git
+- Для Windows: [rsrc](https://github.com/akavel/rsrc) для встраивания иконок (опционально)
+
+### Windows
+
+**Требования:**
+- Go 1.24 или новее ([скачать](https://go.dev/dl/))
+- **Компилятор C (GCC)** - ОБЯЗАТЕЛЬНО! ([TDM-GCC](https://jmeubank.github.io/tdm-gcc/) или [MinGW-w64](https://www.mingw-w64.org/))
+- CGO (включен по умолчанию)
+- Опционально: `rsrc` для встраивания иконки (`go install github.com/akavel/rsrc@latest`)
+
+**⚠️ Важно:** Если видите ошибку `gcc: executable file not found`, установите GCC (см. [BUILD_WINDOWS.md](BUILD_WINDOWS.md) раздел "Решение проблем")
+
+**Сборка:**
+
+1. Клонируйте репозиторий:
+```batch
+git clone https://github.com/Liveafun/singbox-launcher.git
+cd singbox-launcher
+```
+
+2. Запустите скрипт сборки:
+```batch
+build\build_windows.bat
+```
+
+Или вручную:
+```batch
+go mod tidy
+go build -ldflags="-H windowsgui -s -w" -o singbox-launcher.exe
+```
+
+**Подробная инструкция:** См. [BUILD_WINDOWS.md](BUILD_WINDOWS.md)
+
+### macOS
+
+```bash
+# Клонируйте репозиторий
+git clone https://github.com/Liveafun/singbox-launcher.git
+cd singbox-launcher
+
+# Установите зависимости
+go mod download
+
+# Соберите проект
+chmod +x build/build_darwin.sh
+./build/build_darwin.sh
+```
+
+Или вручную:
+```bash
+GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w" -o singbox-launcher
+```
+
+### Linux
+
+```bash
+# Клонируйте репозиторий
+git clone https://github.com/Liveafun/singbox-launcher.git
+cd singbox-launcher
+
+# Установите зависимости
+go mod download
+
+# Соберите проект
+chmod +x build/build_linux.sh
+./build/build_linux.sh
+```
+
+Или вручную:
+```bash
+GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o singbox-launcher
 ```
 
 ## 🤝 Вклад в проект

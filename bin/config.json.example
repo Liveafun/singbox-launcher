@@ -1,3 +1,34 @@
+/**
+ * ============================================================================
+ * ИНСТРУКЦИЯ ПО НАСТРОЙКЕ
+ * ============================================================================
+ * 
+ * Этот файл - пример конфигурации для sing-box launcher.
+ * 
+ * ДЛЯ НАЧАЛА РАБОТЫ:
+ * 
+ * 1. Скопируйте этот файл в config.json:
+ *    - Windows: скопируйте config.json.example в config.json в той же папке bin/
+ *    - macOS/Linux: cp bin/config.json.example bin/config.json
+ * 
+ * 2. Откройте config.json в текстовом редакторе и заполните:
+ *    - В блоке @ParcerConfig укажите URL вашей подписки (subscription URL)
+ *    - В секции experimental.clash_api измените "secret" на свой токен
+ *    - При необходимости настройте DNS, правила маршрутизации и другие параметры
+ * 
+ * 3. Сохраните файл и перезапустите singbox-launcher
+ * 
+ * ПОДРОБНАЯ ДОКУМЕНТАЦИЯ:
+ * - Официальная документация sing-box: https://sing-box.sagernet.org/configuration/
+ * - Примеры конфигураций: https://deepwiki.com/chika0801/sing-box-examples/
+ * 
+ * ВАЖНО:
+ * - Не коммитьте config.json в Git - он содержит ваши личные настройки и секреты!
+ * - Используйте config.json.example как шаблон для новых установок
+ * 
+ * ============================================================================
+ */
+
 {
 /** @ParcerConfig
 
@@ -29,13 +60,7 @@
 }
 */
 
-  // БАЗА Читать:
-  // https://deepwiki.com/chika0801/sing-box-examples/4.3-dns-configuration-and-routing
-  // https://sing-box.sagernet.org/configuration/dns/server/
-  
-  //Downloads:
-  // https://github.com/SagerNet/sing-box/releases/
-  // https://www.wintun.net/
+
   
   
   // --- НАСТРОЙКИ ЛОГИРОВАНИЯ ---

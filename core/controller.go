@@ -530,6 +530,29 @@ func CheckIfSingBoxRunningAtStartUtil(ac *AppController) {
 	}
 }
 
+// CheckConfigFileExists checks if config.json exists and shows a warning if it doesn't
+func CheckConfigFileExists(ac *AppController) {
+	if _, err := os.Stat(ac.ConfigPath); os.IsNotExist(err) {
+		log.Printf("CheckConfigFileExists: config.json not found at %s", ac.ConfigPath)
+		examplePath := filepath.Join(platform.GetBinDir(ac.ExecDir), "config.json.example")
+		
+		message := fmt.Sprintf(
+			"⚠️ Файл конфигурации не найден!\n\n"+
+				"Файл config.json отсутствует в папке bin/.\n\n"+
+				"Для начала работы:\n"+
+				"1. Скопируйте файл config.json.example в config.json\n"+
+				"2. Откройте config.json и заполните его своими настройками\n"+
+				"3. Перезапустите приложение\n\n"+
+				"Пример конфигурации находится здесь:\n%s",
+			examplePath,
+		)
+		
+		fyne.Do(func() {
+			dialog.ShowInformation("Конфигурация не найдена", message, ac.MainWindow)
+		})
+	}
+}
+
 func CheckIfLauncherAlreadyRunningUtil(ac *AppController) {
 	execPath, err := os.Executable()
 	if err != nil {

@@ -23,7 +23,7 @@
 ### Windows
 - Windows 10/11 (x64)
 - [sing-box](https://github.com/SagerNet/sing-box/releases) (исполняемый файл)
-- [WinTun](https://www.wintun.net/) (wintun.dll)
+- [WinTun](https://www.wintun.net/) (wintun.dll) - лицензия MIT, можно распространять
 - Go 1.24+ (для сборки из исходников)
 
 ### macOS
@@ -44,9 +44,10 @@
 2. Распакуйте архив в любую папку (например, `C:\Program Files\singbox-launcher`)
 3. Поместите следующие файлы в папку `bin\`:
    - `sing-box.exe` - из [релизов sing-box](https://github.com/SagerNet/sing-box/releases)
-   - `wintun.dll` - из [релизов WinTun](https://www.wintun.net/)
+   - `wintun.dll` - из [релизов WinTun](https://www.wintun.net/) (лицензия MIT, можно распространять)
+     * **Примечание:** В релизах GitHub `wintun.dll` может быть уже включен для удобства
    - `parser.exe` - парсер конфигурации (если используется)
-   - `config.json` - скопируйте `config.json.example` и настройте под себя
+   - `config.json` - скопируйте `config.json.example` в `config.json` и настройте под себя
 
 4. Запустите `singbox-launcher.exe`
 

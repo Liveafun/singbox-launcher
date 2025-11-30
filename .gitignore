@@ -58,8 +58,6 @@ releases/
 bin/config.json
 bin/*.exe
 bin/*.dll
-bin/parser.exe
-bin/parser
 
 # Backup files
 *.bak

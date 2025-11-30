@@ -46,7 +46,6 @@
    - `sing-box.exe` - из [релизов sing-box](https://github.com/SagerNet/sing-box/releases)
    - `wintun.dll` - из [релизов WinTun](https://www.wintun.net/) (лицензия MIT, можно распространять)
      * **Примечание:** В релизах GitHub `wintun.dll` может быть уже включен для удобства
-   - `parser.exe` - парсер конфигурации (если используется)
    - `config.json` - скопируйте `config.json.example` в `config.json` и настройте под себя
 
 4. Запустите `singbox-launcher.exe`
@@ -57,7 +56,6 @@
 2. Распакуйте архив
 3. Поместите файлы в папку `bin/`:
    - `sing-box` - исполняемый файл для macOS
-   - `parser` - парсер конфигурации (если используется)
    - `config.json` - конфигурационный файл
 
 4. Запустите приложение:
@@ -71,7 +69,6 @@
 2. Распакуйте архив
 3. Поместите файлы в папку `bin/`:
    - `sing-box` - исполняемый файл для Linux
-   - `parser` - парсер конфигурации (если используется)
    - `config.json` - конфигурационный файл
 
 4. Сделайте исполняемым и запустите:
@@ -207,7 +204,6 @@ singbox-launcher/
 ├── bin/
 │   ├── sing-box.exe (или sing-box для Unix) - скачать отдельно
 │   ├── wintun.dll (только Windows) - скачать отдельно
-│   ├── parser.exe (или parser для Unix, опционально) - скачать отдельно
 │   └── config.json - создать из config.json.example
 ├── logs/
 │   ├── singbox-launcher.log

@@ -37,6 +37,7 @@ const (
 	gracefulShutdownTimeout = 2 * time.Second
 	processWaitTimeout      = 30 * time.Second // Timeout for process.Wait() to prevent hanging
 	maxLogFileSize          = 10 * 1024 * 1024 // 10 MB - maximum log file size before rotation
+	minProcessRuntime       = 2 * time.Second  // Minimum runtime to consider process successful
 )
 
 // AppController - the main structure encapsulating all application state and logic.
@@ -497,16 +498,21 @@ func StartSingBoxProcess(ac *AppController) {
 		log.Printf("startSingBox: Failed to start Sing-Box: %v", err)
 		return
 	}
+	startTime := time.Now()
 	ac.RunningState.Set(true)
 	ac.StoppedByUser = false
 	//Добавляем лог с PID
-	log.Printf("startSingBox: Sing-Box started. PID=%d", ac.SingboxCmd.Process.Pid)
+	log.Printf("startSingBox: Sing-Box started. PID=%d at %v", ac.SingboxCmd.Process.Pid, startTime)
 
-	go MonitorSingBoxProcess(ac, ac.SingboxCmd)
+	go MonitorSingBoxProcess(ac, ac.SingboxCmd, startTime)
 }
 
 // MonitorSingBoxProcess monitors the sing-box process.
-func MonitorSingBoxProcess(ac *AppController, cmdToMonitor *exec.Cmd) {
+func MonitorSingBoxProcess(ac *AppController, cmdToMonitor *exec.Cmd, startTime time.Time) {
+	// Store the PID we're monitoring to avoid conflicts
+	monitoredPID := cmdToMonitor.Process.Pid
+	log.Printf("monitorSingBox: Starting monitor for PID=%d (started at %v)", monitoredPID, startTime)
+
 	// Use a channel to wait for process completion with timeout
 	waitDone := make(chan error, 1)
 	go func() {
@@ -514,20 +520,74 @@ func MonitorSingBoxProcess(ac *AppController, cmdToMonitor *exec.Cmd) {
 	}()
 
 	var err error
+	var exitCode int = -1
 	select {
-	case err = <-waitDone:
-		// Process completed normally
-	case <-time.After(processWaitTimeout):
-		// Process wait timed out - likely a zombie process
-		log.Printf("monitorSingBox: Process wait timed out after %v. Process may be a zombie. Forcing kill.", processWaitTimeout)
-		if cmdToMonitor.Process != nil {
-			_ = cmdToMonitor.Process.Kill()
+	case waitErr := <-waitDone:
+		// Process completed - check exit code
+		if waitErr != nil {
+			err = waitErr
+			// Try to extract exit code from ExitError
+			if exitError, ok := waitErr.(*exec.ExitError); ok {
+				if exitError.ProcessState != nil {
+					exitCode = exitError.ProcessState.ExitCode()
+					log.Printf("monitorSingBox: Process exited with code %d", exitCode)
+				}
+			}
+		} else {
+			// Process exited with code 0 - check if it's actually running
+			if cmdToMonitor.ProcessState != nil {
+				exitCode = cmdToMonitor.ProcessState.ExitCode()
+				log.Printf("monitorSingBox: Process exited with code %d", exitCode)
+			}
+				// Check runtime - if process exited too quickly, it's likely an error
+			runtime := time.Since(startTime)
+			log.Printf("monitorSingBox: Process runtime: %v", runtime)
+			
+			// Check if process is still actually running in the system
+			if isSingBoxProcessRunning() {
+				// Process is still running - might be a different instance or child process
+				log.Printf("monitorSingBox: Process exited but sing-box is still running in system. This might be normal.")
+				// Don't treat this as an error - process might have spawned a child
+				err = nil
+			} else if exitCode == 0 && runtime >= minProcessRuntime {
+				// Process exited with code 0 and ran for at least minProcessRuntime - this is a graceful exit
+				log.Printf("monitorSingBox: Process exited gracefully (code 0) after %v. This is normal.", runtime)
+				err = nil
+			} else if exitCode == 0 && runtime < minProcessRuntime {
+				// Process exited with code 0 but too quickly - likely a configuration error
+				log.Printf("monitorSingBox: Process exited with code 0 but too quickly (%v < %v). This is likely an error.", runtime, minProcessRuntime)
+				err = fmt.Errorf("process exited too quickly (%v) - likely configuration error", runtime)
+			} else {
+				// Process exited but we couldn't determine the code - treat as error
+				err = fmt.Errorf("process exited but exit code unknown")
+			}
 		}
-		err = fmt.Errorf("process wait timed out after %v", processWaitTimeout)
+	case <-time.After(processWaitTimeout):
+		// Process wait timed out - check if process is still running
+		if isSingBoxProcessRunning() {
+			// Process is still running - this is good, just the Wait() timed out
+			log.Printf("monitorSingBox: Process wait timed out but process is still running. This is normal for long-running processes.")
+			err = nil
+			// Don't kill the process - it's running fine
+			return // Exit monitor but keep process running
+		} else {
+			// Process is not running and Wait() timed out - likely a zombie
+			log.Printf("monitorSingBox: Process wait timed out and process is not running. Forcing cleanup.")
+			if cmdToMonitor.Process != nil {
+				_ = cmdToMonitor.Process.Kill()
+			}
+			err = fmt.Errorf("process wait timed out after %v", processWaitTimeout)
+		}
 	}
 
 	ac.CmdMutex.Lock()
 	defer ac.CmdMutex.Unlock()
+
+	// Check if this monitor is still valid (process might have been restarted)
+	if ac.SingboxCmd == nil || ac.SingboxCmd.Process == nil || ac.SingboxCmd.Process.Pid != monitoredPID {
+		log.Printf("monitorSingBox: Process was restarted (PID changed). This monitor is obsolete. Exiting.")
+		return
+	}
 
 	if ac.StoppedByUser {
 		log.Println("monitorSingBox: Sing-Box exited as requested by user.")
@@ -536,12 +596,13 @@ func MonitorSingBoxProcess(ac *AppController, cmdToMonitor *exec.Cmd) {
 		return
 	}
 
-	if err != nil {
-		log.Printf("monitorSingBox: Sing-Box crashed: %v, attempting auto-restart", err)
+	// Check if process exited with error code (non-zero) or other error
+	if err != nil || exitCode != 0 {
+		log.Printf("monitorSingBox: Sing-Box exited with error (code=%d, err=%v), attempting auto-restart", exitCode, err)
 		ac.RunningState.Set(false)
 		ac.ConsecutiveCrashAttempts++
 		if ac.ConsecutiveCrashAttempts <= restartAttempts {
-			ac.ShowAutoHideInfo("Crash", fmt.Sprintf("Sing-Box crashed, restarting... (attempt %d/%d)", ac.ConsecutiveCrashAttempts, restartAttempts))
+			ac.ShowAutoHideInfo("Crash", fmt.Sprintf("Sing-Box exited, restarting... (attempt %d/%d)", ac.ConsecutiveCrashAttempts, restartAttempts))
 
 			ac.CmdMutex.Unlock()
 			StartSingBoxProcess(ac)
@@ -570,7 +631,8 @@ func MonitorSingBoxProcess(ac *AppController, cmdToMonitor *exec.Cmd) {
 		ac.ShowErrorDialog(fmt.Errorf("Sing-Box failed to restart after %d attempts. Check sing-box.log for details.", restartAttempts))
 		ac.ConsecutiveCrashAttempts = 0
 	} else {
-		log.Println("monitorSingBox: Sing-Box exited gracefully.")
+		// Process exited gracefully with code 0
+		log.Printf("monitorSingBox: Sing-Box exited gracefully (code 0).")
 		ac.ConsecutiveCrashAttempts = 0
 		ac.RunningState.Set(false)
 	}

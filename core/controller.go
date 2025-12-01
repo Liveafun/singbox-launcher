@@ -6,8 +6,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -26,7 +28,7 @@ import (
 )
 
 // Constants for log file names
-	const (
+const (
 	logFileName             = "logs/" + constants.MainLogFileName
 	childLogFileName        = "logs/" + constants.ChildLogFileName
 	parserLogFileName       = "logs/" + constants.ParserLogFileName
@@ -88,9 +90,9 @@ type AppController struct {
 	ApiLogFile   *os.File
 
 	// --- Clash API configuration ---
-	ClashAPIBaseURL string
-	ClashAPIToken   string
-	ClashAPIEnabled bool
+	ClashAPIBaseURL    string
+	ClashAPIToken      string
+	ClashAPIEnabled    bool
 	SelectedClashGroup string
 
 	// --- Callbacks for UI logic ---
@@ -111,7 +113,7 @@ func checkAndRotateLogFile(logPath string) {
 	if err != nil {
 		return // File doesn't exist yet, nothing to rotate
 	}
-	
+
 	if info.Size() > maxLogFileSize {
 		// Rotate: rename current file to .old
 		oldPath := logPath + ".old"
@@ -127,7 +129,7 @@ func checkAndRotateLogFile(logPath string) {
 // openLogFileWithRotation opens a log file and rotates it if it exceeds maxLogFileSize
 func openLogFileWithRotation(logPath string) (*os.File, error) {
 	checkAndRotateLogFile(logPath)
-	
+
 	// Open file in append mode (not truncate) to preserve recent logs
 	// But if file was rotated, it will be a new file
 	return os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
@@ -142,18 +144,18 @@ func NewAppController(appIconData, greyIconData, greenIconData []byte) (*AppCont
 		return nil, fmt.Errorf("NewAppController: cannot determine executable path: %w", err)
 	}
 	ac.ExecDir = filepath.Dir(ex)
-	
+
 	// Use platform-specific functions
 	if err := platform.EnsureDirectories(ac.ExecDir); err != nil {
 		return nil, fmt.Errorf("NewAppController: cannot create directories: %w", err)
 	}
-	
+
 	ac.ConfigPath = platform.GetConfigPath(ac.ExecDir)
 	singboxName, parserName := platform.GetExecutableNames()
 	ac.SingboxPath = filepath.Join(ac.ExecDir, "bin", singboxName)
 	ac.ParserPath = filepath.Join(ac.ExecDir, "bin", parserName)
 	ac.WintunPath = platform.GetWintunPath(ac.ExecDir)
-	
+
 	// Open log files with rotation support
 	logFile, err := openLogFileWithRotation(filepath.Join(ac.ExecDir, logFileName))
 	if err != nil {
@@ -482,7 +484,7 @@ func StartSingBoxProcess(ac *AppController) {
 	if ac.ChildLogFile != nil {
 		// Check and rotate log file before starting new process to prevent unbounded growth
 		checkAndRotateLogFile(filepath.Join(ac.ExecDir, childLogFileName))
-		
+
 		// Write directly to file - no buffering in memory
 		// This prevents memory leaks from accumulating log output
 		// Logs are written immediately to disk, not stored in memory
@@ -508,7 +510,7 @@ func StartSingBoxProcess(ac *AppController) {
 func MonitorSingBoxProcess(ac *AppController, cmdToMonitor *exec.Cmd) {
 	// Store the PID we're monitoring to avoid conflicts with restarted processes
 	monitoredPID := cmdToMonitor.Process.Pid
-	
+
 	// Wait for process completion - no timeout for long-running processes
 	// The process should run until it exits or is stopped by user
 	err := cmdToMonitor.Wait()
@@ -516,79 +518,113 @@ func MonitorSingBoxProcess(ac *AppController, cmdToMonitor *exec.Cmd) {
 	ac.CmdMutex.Lock()
 	defer ac.CmdMutex.Unlock()
 
-	// Check if this monitor is still valid (process might have been restarted)
+	// ЗОЛОТОЙ СТАНДАРТ: Порядок проверок для защиты от всех гонок
+	// 1. Сначала PID (не мой ли процесс?)
 	if ac.SingboxCmd == nil || ac.SingboxCmd.Process == nil || ac.SingboxCmd.Process.Pid != monitoredPID {
 		log.Printf("monitorSingBox: Process was restarted (PID changed from %d). This monitor is obsolete. Exiting.", monitoredPID)
 		return
 	}
 
+	// 2. Потом StoppedByUser (пользователь остановил?)
 	if ac.StoppedByUser {
 		log.Println("monitorSingBox: Sing-Box exited as requested by user.")
+		ac.ConsecutiveCrashAttempts = 0
+		ac.RunningState.Set(false)
+		ac.StoppedByUser = false // Сбрасываем флаг для следующего запуска
+		return
+	}
+
+	// 3. Потом err == nil (нормально вышел?)
+	if err == nil {
+		log.Println("monitorSingBox: Sing-Box exited gracefully (exit code 0).")
 		ac.ConsecutiveCrashAttempts = 0
 		ac.RunningState.Set(false)
 		return
 	}
 
-	if err != nil {
-		log.Printf("monitorSingBox: Sing-Box crashed: %v, attempting auto-restart", err)
-		ac.RunningState.Set(false)
-		ac.ConsecutiveCrashAttempts++
-		if ac.ConsecutiveCrashAttempts <= restartAttempts {
-			ac.ShowAutoHideInfo("Crash", fmt.Sprintf("Sing-Box crashed, restarting... (attempt %d/%d)", ac.ConsecutiveCrashAttempts, restartAttempts))
+	// 4. Только потом — краш → рестарт
+	// Процесс завершился с ошибкой - проверяем лимит попыток
+	ac.RunningState.Set(false)
+	ac.ConsecutiveCrashAttempts++
 
-			ac.CmdMutex.Unlock()
-			StartSingBoxProcess(ac)
-			ac.CmdMutex.Lock()
-
-			if ac.RunningState.IsRunning() {
-				log.Println("monitorSingBox: Sing-Box restarted successfully.")
-				currentAttemptCount := ac.ConsecutiveCrashAttempts
-				go func() {
-					time.Sleep(stabilityThreshold)
-					ac.CmdMutex.Lock()
-					defer ac.CmdMutex.Unlock()
-
-					if ac.RunningState.IsRunning() && ac.ConsecutiveCrashAttempts == currentAttemptCount {
-						log.Printf("monitorSingBox: Process has been stable for %v. Resetting crash counter from %d to 0.", stabilityThreshold, ac.ConsecutiveCrashAttempts)
-						ac.ConsecutiveCrashAttempts = 0
-					} else {
-						log.Printf("monitorSingBox: Stability timer expired, but conditions for reset not met (running: %v, current attempts: %d, attempts at timer start: %d).", ac.RunningState.IsRunning(), ac.ConsecutiveCrashAttempts, currentAttemptCount)
-					}
-				}()
-				return
-			} else {
-				log.Printf("monitorSingBox: Restart attempt %d failed.", ac.ConsecutiveCrashAttempts)
-			}
-		}
+	if ac.ConsecutiveCrashAttempts > restartAttempts {
+		log.Printf("monitorSingBox: Maximum restart attempts (%d) reached. Stopping auto-restart.", restartAttempts)
 		ac.ShowErrorDialog(fmt.Errorf("Sing-Box failed to restart after %d attempts. Check sing-box.log for details.", restartAttempts))
 		ac.ConsecutiveCrashAttempts = 0
+		return
+	}
+
+	// Пытаемся перезапустить
+	log.Printf("monitorSingBox: Sing-Box crashed: %v, attempting auto-restart (attempt %d/%d)", err, ac.ConsecutiveCrashAttempts, restartAttempts)
+	ac.ShowAutoHideInfo("Crash", fmt.Sprintf("Sing-Box crashed, restarting... (attempt %d/%d)", ac.ConsecutiveCrashAttempts, restartAttempts))
+
+	ac.CmdMutex.Unlock()
+	StartSingBoxProcess(ac)
+	ac.CmdMutex.Lock()
+
+	if ac.RunningState.IsRunning() {
+		log.Println("monitorSingBox: Sing-Box restarted successfully.")
+		currentAttemptCount := ac.ConsecutiveCrashAttempts
+		go func() {
+			time.Sleep(stabilityThreshold)
+			ac.CmdMutex.Lock()
+			defer ac.CmdMutex.Unlock()
+
+			if ac.RunningState.IsRunning() && ac.ConsecutiveCrashAttempts == currentAttemptCount {
+				log.Printf("monitorSingBox: Process has been stable for %v. Resetting crash counter from %d to 0.", stabilityThreshold, ac.ConsecutiveCrashAttempts)
+				ac.ConsecutiveCrashAttempts = 0
+			} else {
+				log.Printf("monitorSingBox: Stability timer expired, but conditions for reset not met (running: %v, current attempts: %d, attempts at timer start: %d).", ac.RunningState.IsRunning(), ac.ConsecutiveCrashAttempts, currentAttemptCount)
+			}
+		}()
 	} else {
-		log.Println("monitorSingBox: Sing-Box exited gracefully.")
-		ac.ConsecutiveCrashAttempts = 0
-		ac.RunningState.Set(false)
+		log.Printf("monitorSingBox: Restart attempt %d failed.", ac.ConsecutiveCrashAttempts)
 	}
 }
 
 // StopSingBoxProcess is the unified function to stop the sing-box process.
 func StopSingBoxProcess(ac *AppController) {
 	ac.CmdMutex.Lock()
-	defer ac.CmdMutex.Unlock()
+
+	// КРИТИЧНО: Устанавливаем флаг ПЕРЕД отправкой сигнала
+	// Это гарантирует, что монитор увидит флаг, даже если процесс завершится очень быстро
+	ac.StoppedByUser = true
 	ac.ConsecutiveCrashAttempts = 0
+
 	if !ac.RunningState.IsRunning() {
+		ac.StoppedByUser = false
+		ac.CmdMutex.Unlock()
 		return
 	}
+
 	if ac.SingboxCmd == nil || ac.SingboxCmd.Process == nil {
 		log.Println("StopSingBoxProcess: Inconsistent state detected. Correcting state.")
 		ac.RunningState.Set(false)
+		ac.StoppedByUser = false
+		ac.CmdMutex.Unlock()
 		return
 	}
 
-	log.Println("stopSingBox: Attempting graceful shutdown (os.Interrupt)...")
-	ac.StoppedByUser = true
+	log.Println("stopSingBox: Attempting graceful shutdown...")
 	processToStop := ac.SingboxCmd.Process
 
-	if err := processToStop.Signal(os.Interrupt); err != nil {
-		log.Printf("stopSingBox: Error sending os.Interrupt: %v. Attempting to kill process directly.", err)
+	// Разблокируем мьютекс перед отправкой сигнала, чтобы не блокировать
+	ac.CmdMutex.Unlock()
+
+	var err error
+	if runtime.GOOS == "windows" {
+		// sing-box ловит именно CTRL_BREAK_EVENT на Windows
+		dll := syscall.NewLazyDLL("kernel32.dll")
+		proc := dll.NewProc("GenerateConsoleCtrlEvent")
+		if r, _, e := proc.Call(uintptr(syscall.CTRL_BREAK_EVENT), uintptr(processToStop.Pid)); r == 0 {
+			err = e
+		}
+	} else {
+		err = processToStop.Signal(os.Interrupt)
+	}
+
+	if err != nil {
+		log.Printf("stopSingBox: Graceful signal failed: %v. Forcing kill.", err)
 		if killErr := processToStop.Kill(); killErr != nil {
 			log.Printf("stopSingBox: Failed to kill Sing-Box process: %v", killErr)
 		}
@@ -660,7 +696,7 @@ func CheckConfigFileExists(ac *AppController) {
 	if _, err := os.Stat(ac.ConfigPath); os.IsNotExist(err) {
 		log.Printf("CheckConfigFileExists: config.json not found at %s", ac.ConfigPath)
 		examplePath := filepath.Join(platform.GetBinDir(ac.ExecDir), constants.ConfigExampleName)
-		
+
 		message := fmt.Sprintf(
 			"⚠️ Файл конфигурации не найден!\n\n"+
 				"Файл %s отсутствует в папке bin/.\n\n"+
@@ -675,7 +711,7 @@ func CheckConfigFileExists(ac *AppController) {
 			constants.ConfigFileName,
 			examplePath,
 		)
-		
+
 		fyne.Do(func() {
 			dialog.ShowInformation("Конфигурация не найдена", message, ac.MainWindow)
 		})

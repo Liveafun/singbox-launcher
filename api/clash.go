@@ -108,6 +108,13 @@ func TestAPIConnection(baseURL, token string, logFile *os.File) error {
 		if logFile != nil {
 			fmt.Fprint(logFile, fmt.Sprintf("[%s] Error executing API test request: %v\n", time.Now().Format("2006-01-02 15:04:05"), err))
 		}
+		// Проверяем тип ошибки для более понятного сообщения
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return fmt.Errorf("network timeout: connection timed out")
+		}
+		if opErr, ok := err.(*net.OpError); ok && opErr.Op == "dial" {
+			return fmt.Errorf("network error: cannot connect to server")
+		}
 		return fmt.Errorf("failed to execute API test request: %w", err)
 	}
 	defer resp.Body.Close()
@@ -163,6 +170,13 @@ func GetProxiesInGroup(baseURL, token, groupName string, logFile *os.File) ([]Pr
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		logMsg("GetProxiesInGroup: ERROR: Failed to execute request: %v", err)
+		// Проверяем тип ошибки для более понятного сообщения
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return nil, "", fmt.Errorf("network timeout: connection timed out")
+		}
+		if opErr, ok := err.(*net.OpError); ok && opErr.Op == "dial" {
+			return nil, "", fmt.Errorf("network error: cannot connect to server")
+		}
 		return nil, "", fmt.Errorf("failed to execute /proxies request: %w", err)
 	}
 	defer resp.Body.Close()
@@ -275,6 +289,13 @@ func SwitchProxy(baseURL, token, group, proxy string, logFile *os.File) error {
 		if logFile != nil {
 			fmt.Fprint(logFile, fmt.Sprintf("[%s] Error executing switch request for %s/%s: %v\n", time.Now().Format("2006-01-02 15:04:05"), group, proxy, err))
 		}
+		// Проверяем тип ошибки для более понятного сообщения
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return fmt.Errorf("network timeout: connection timed out")
+		}
+		if opErr, ok := err.(*net.OpError); ok && opErr.Op == "dial" {
+			return fmt.Errorf("network error: cannot connect to server")
+		}
 		return fmt.Errorf("failed to execute switch request: %w", err)
 	}
 	defer resp.Body.Close()
@@ -320,6 +341,13 @@ func GetDelay(baseURL, token, proxyName string, logFile *os.File) (int64, error)
 	if err != nil {
 		if logFile != nil {
 			fmt.Fprint(logFile, fmt.Sprintf("[%s] Error executing delay request for %s: %v\n", time.Now().Format("2006-01-02 15:04:05"), proxyName, err))
+		}
+		// Проверяем тип ошибки для более понятного сообщения
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return 0, fmt.Errorf("network timeout: connection timed out")
+		}
+		if opErr, ok := err.(*net.OpError); ok && opErr.Op == "dial" {
+			return 0, fmt.Errorf("network error: cannot connect to server")
 		}
 		return 0, fmt.Errorf("failed to execute delay request: %w", err)
 	}

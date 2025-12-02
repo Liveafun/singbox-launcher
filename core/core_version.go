@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,7 +12,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"singbox-launcher/internal/platform"
 )
@@ -100,11 +100,14 @@ func (ac *AppController) GetLatestCoreVersion() (string, error) {
 
 // getLatestVersionFromURL получает последнюю версию по конкретному URL
 func (ac *AppController) getLatestVersionFromURL(url string) (string, error) {
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
+	// Создаем контекст с таймаутом
+	ctx, cancel := context.WithTimeout(context.Background(), NetworkRequestTimeout)
+	defer cancel()
 
-	req, err := http.NewRequest("GET", url, nil)
+	// Используем универсальный HTTP клиент
+	client := createHTTPClient(NetworkRequestTimeout)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
@@ -114,6 +117,10 @@ func (ac *AppController) getLatestVersionFromURL(url string) (string, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
+		// Проверяем тип ошибки
+		if IsNetworkError(err) {
+			return "", fmt.Errorf("network error: %s", GetNetworkErrorMessage(err))
+		}
 		return "", fmt.Errorf("check failed: %w", err)
 	}
 	defer resp.Body.Close()

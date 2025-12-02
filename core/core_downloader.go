@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -115,11 +116,14 @@ func (ac *AppController) getReleaseInfoFromGitHub(version string) (*ReleaseInfo,
 		url = "https://api.github.com/repos/SagerNet/sing-box/releases/latest"
 	}
 
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
+	// Создаем контекст с таймаутом
+	ctx, cancel := context.WithTimeout(context.Background(), NetworkRequestTimeout)
+	defer cancel()
 
-	req, err := http.NewRequest("GET", url, nil)
+	// Используем универсальный HTTP клиент
+	client := createHTTPClient(NetworkRequestTimeout)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -129,6 +133,10 @@ func (ac *AppController) getReleaseInfoFromGitHub(version string) (*ReleaseInfo,
 
 	resp, err := client.Do(req)
 	if err != nil {
+		// Проверяем тип ошибки
+		if IsNetworkError(err) {
+			return nil, fmt.Errorf("network error: %s", GetNetworkErrorMessage(err))
+		}
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -306,11 +314,15 @@ func (ac *AppController) downloadFile(url, destPath string, progressChan chan Do
 
 // downloadFileFromURL скачивает файл по конкретному URL
 func (ac *AppController) downloadFileFromURL(url, destPath string, progressChan chan DownloadProgress) error {
-	client := &http.Client{
-		Timeout: 5 * time.Minute,
-	}
+	// Для скачивания используем больший таймаут
+	downloadTimeout := 5 * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), downloadTimeout)
+	defer cancel()
 
-	req, err := http.NewRequest("GET", url, nil)
+	// Используем клиент с большим таймаутом для скачивания
+	client := createHTTPClient(downloadTimeout)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -319,6 +331,10 @@ func (ac *AppController) downloadFileFromURL(url, destPath string, progressChan 
 
 	resp, err := client.Do(req)
 	if err != nil {
+		// Проверяем тип ошибки
+		if IsNetworkError(err) {
+			return fmt.Errorf("network error: %s", GetNetworkErrorMessage(err))
+		}
 		return fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()

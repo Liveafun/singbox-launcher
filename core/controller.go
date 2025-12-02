@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -461,18 +462,140 @@ func (ac *AppController) GetSelectedIndex() int {
 }
 
 // isSingBoxProcessRunning checks if a sing-box process is currently running on the system.
-func isSingBoxProcessRunning() bool {
-	processes, err := ps.Processes()
-	if err != nil {
-		log.Printf("isSingBoxProcessRunning: error listing processes: %v", err)
-		return false // Assume not running if we can't check
-	}
+// Uses tasklist command on Windows for more reliable process detection.
+// Returns true if process found, and the PID of found process (or -1 if not found).
+func isSingBoxProcessRunning(ac *AppController) (bool, int) {
 	processName := platform.GetProcessNameForCheck()
-	for _, p := range processes {
-		if strings.EqualFold(p.Executable(), processName) {
-			return true
+	log.Printf("isSingBoxProcessRunning: Looking for process name '%s'", processName)
+
+	ac.CmdMutex.Lock()
+	ourPID := -1
+	if ac.SingboxCmd != nil && ac.SingboxCmd.Process != nil {
+		ourPID = ac.SingboxCmd.Process.Pid
+	}
+	ac.CmdMutex.Unlock()
+	log.Printf("isSingBoxProcessRunning: Our tracked PID=%d", ourPID)
+
+	// На Windows используем tasklist для более надежной проверки
+	if runtime.GOOS == "windows" {
+		// Используем tasklist /FI "IMAGENAME eq sing-box.exe" /FO CSV /NH
+		cmd := exec.Command("tasklist", "/FI", fmt.Sprintf("IMAGENAME eq %s", processName), "/FO", "CSV", "/NH")
+		platform.PrepareCommand(cmd) // Скрываем консольное окно
+		output, err := cmd.Output()
+		if err != nil {
+			log.Printf("isSingBoxProcessRunning: tasklist command failed: %v, falling back to ps library", err)
+			// Fallback на старый способ
+			return isSingBoxProcessRunningFallback(ac)
+		}
+
+		// Парсим CSV вывод tasklist
+		// Формат: "имя.exe","PID","Session Name","Session#","Mem Usage"
+		outputStr := strings.TrimSpace(string(output))
+		if outputStr == "" {
+			log.Printf("isSingBoxProcessRunning: No sing-box process found via tasklist")
+			return false, -1
+		}
+
+		// Парсим CSV строку
+		lines := strings.Split(outputStr, "\n")
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			// Парсим CSV: "имя.exe","PID","..."
+			// Используем более надежный парсинг CSV
+			parts := parseCSVLine(line)
+			if len(parts) >= 2 {
+				name := strings.Trim(parts[0], "\"")
+				pidStr := strings.Trim(parts[1], "\"")
+				if strings.EqualFold(name, processName) {
+					if pid, err := strconv.Atoi(pidStr); err == nil {
+						isOurProcess := (ourPID != -1 && pid == ourPID)
+						log.Printf("isSingBoxProcessRunning: Found process via tasklist: PID=%d, name='%s' (our tracked PID=%d, isOurProcess=%v)", pid, name, ourPID, isOurProcess)
+						return true, pid
+					} else {
+						log.Printf("isSingBoxProcessRunning: Failed to parse PID '%s': %v", pidStr, err)
+					}
+				}
+			}
+		}
+		log.Printf("isSingBoxProcessRunning: tasklist found processes but none matched '%s'", processName)
+		return false, -1
+	}
+
+	// Для других ОС используем старый способ
+	return isSingBoxProcessRunningFallback(ac)
+}
+
+// parseCSVLine парсит CSV строку, учитывая кавычки
+func parseCSVLine(line string) []string {
+	var parts []string
+	var current strings.Builder
+	inQuotes := false
+
+	for i, r := range line {
+		switch r {
+		case '"':
+			inQuotes = !inQuotes
+		case ',':
+			if !inQuotes {
+				parts = append(parts, current.String())
+				current.Reset()
+			} else {
+				current.WriteRune(r)
+			}
+		default:
+			current.WriteRune(r)
+		}
+		// Последний символ
+		if i == len(line)-1 {
+			parts = append(parts, current.String())
 		}
 	}
+
+	return parts
+}
+
+// isSingBoxProcessRunningFallback uses ps library as fallback method
+func isSingBoxProcessRunningFallback(ac *AppController) (bool, int) {
+	processes, err := ps.Processes()
+	if err != nil {
+		log.Printf("isSingBoxProcessRunningFallback: error listing processes: %v", err)
+		return false, -1
+	}
+	processName := platform.GetProcessNameForCheck()
+
+	ac.CmdMutex.Lock()
+	ourPID := -1
+	if ac.SingboxCmd != nil && ac.SingboxCmd.Process != nil {
+		ourPID = ac.SingboxCmd.Process.Pid
+	}
+	ac.CmdMutex.Unlock()
+
+	for _, p := range processes {
+		execName := p.Executable()
+		if strings.EqualFold(execName, processName) {
+			foundPID := p.Pid()
+			isOurProcess := (ourPID != -1 && foundPID == ourPID)
+			log.Printf("isSingBoxProcessRunningFallback: Found process: PID=%d, executable='%s' (our tracked PID=%d, isOurProcess=%v)", foundPID, execName, ourPID, isOurProcess)
+			return true, foundPID
+		}
+	}
+	log.Printf("isSingBoxProcessRunningFallback: No sing-box process found (checked %d processes)", len(processes))
+	return false, -1
+}
+
+// checkAndShowSingBoxRunningWarning checks if sing-box is running and shows warning dialog if found.
+// Returns true if process was found and warning was shown, false otherwise.
+func checkAndShowSingBoxRunningWarning(ac *AppController, context string) bool {
+	found, foundPID := isSingBoxProcessRunning(ac)
+	if found {
+		log.Printf("%s: Found sing-box process already running (PID=%d). Showing warning dialog.", context, foundPID)
+		ac.ShowSingBoxAlreadyRunningWarning()
+		return true
+	}
+	log.Printf("%s: No sing-box process found", context)
 	return false
 }
 
@@ -484,8 +607,7 @@ func StartSingBoxProcess(ac *AppController) {
 	}
 
 	// Проверяем, не запущен ли уже процесс на уровне ОС
-	if isSingBoxProcessRunning() {
-		ac.ShowSingBoxAlreadyRunningWarning()
+	if checkAndShowSingBoxRunningWarning(ac, "startSingBox") {
 		return
 	}
 
@@ -685,8 +807,8 @@ func RunParserProcess(ac *AppController) {
 		ac.ParserMutex.Unlock()
 	}()
 
-	// Вызываем внешний parser для обновления конфигурации
-	err := ac.RunHidden(ac.ParserPath, []string{}, filepath.Join(ac.ExecDir, parserLogFileName), platform.GetBinDir(ac.ExecDir))
+	// Вызываем встроенный парсер для обновления конфигурации
+	err := UpdateConfigFromSubscriptions(ac)
 
 	// Обрабатываем результат
 	if err != nil {
@@ -699,18 +821,7 @@ func RunParserProcess(ac *AppController) {
 }
 
 func CheckIfSingBoxRunningAtStartUtil(ac *AppController) {
-	processes, err := ps.Processes()
-	if err != nil {
-		log.Printf("CheckIfSingBoxRunningAtStart: Error listing processes: %v", err)
-		return
-	}
-	processName := platform.GetProcessNameForCheck()
-	for _, p := range processes {
-		if strings.EqualFold(p.Executable(), processName) {
-			ac.ShowSingBoxAlreadyRunningWarning()
-			return
-		}
-	}
+	checkAndShowSingBoxRunningWarning(ac, "CheckIfSingBoxRunningAtStart")
 }
 
 // CheckConfigFileExists checks if config.json exists and shows a warning if it doesn't

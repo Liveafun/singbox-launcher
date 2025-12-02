@@ -9,7 +9,7 @@
 - `sing-box.exe` (Windows) / `sing-box` (macOS/Linux) - прокси-клиент (включен в релиз)
 
 ### Конфигурация
-- `config.json.example` - пример конфигурации (скопируйте в `config.json` и настройте)
+- `config.example.json` - пример конфигурации (скопируйте в `config.json` и настройте)
 
 ### Дополнительные файлы (Windows)
 - `wintun.dll` - библиотека для TUN интерфейса (может быть включена в релиз)
@@ -18,13 +18,13 @@
 
 ### 1. Первый запуск
 
-1. **Скопируйте `config.json.example` в `config.json`**:
+1. **Скопируйте `config.example.json` в `config.json`**:
    ```bash
    # Windows (в командной строке)
-   copy bin\config.json.example bin\config.json
+   copy bin\config.example.json bin\config.json
    
    # macOS/Linux
-   cp bin/config.json.example bin/config.json
+   cp bin/config.example.json bin/config.json
    ```
 
 2. **Откройте `config.json`** и настройте:
@@ -53,8 +53,8 @@ singbox-launcher/
 │   ├── singbox-launcher.exe (или singbox-launcher)
 │   ├── sing-box.exe (или sing-box)
 │   ├── wintun.dll (только Windows)
-│   ├── config.json (создайте из config.json.example)
-│   └── config.json.example
+│   ├── config.json (создайте из config.example.json)
+│   └── config.example.json
 ├── logs/ (создается автоматически)
 │   ├── singbox-launcher.log
 │   ├── sing-box.log

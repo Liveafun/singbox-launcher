@@ -50,7 +50,7 @@
 
 **🔗 Ссылки:**
 - **GitHub:** https://github.com/Leadaxe/singbox-launcher  
-- **Пример конфигурации:** https://github.com/Leadaxe/singbox-launcher/blob/main/bin/config.json.example
+- **Пример конфигурации:** https://github.com/Leadaxe/singbox-launcher/blob/main/bin/config.example.json
 
 ## 📋 Требования
 
@@ -74,7 +74,7 @@
 1. Скачайте последний релиз с [GitHub Releases](https://github.com/Leadaxe/singbox-launcher/releases)
 2. Распакуйте архив в любую папку (например, `C:\Program Files\singbox-launcher`)
 3. Поместите `config.json` в папку `bin\`:
-   - Скопируйте `config.json.example` в `config.json` и настройте под себя
+   - Скопируйте `config.example.json` в `config.json` и настройте под себя
 4. Запустите `singbox-launcher.exe`
 5. **Автоматическое скачивание** (рекомендуется):
    - Перейдите на вкладку **"Core"**
@@ -164,7 +164,7 @@ singbox-launcher/
 ├── bin/
 │   ├── sing-box.exe (или sing-box для Unix) - автоматически скачивается через вкладку Core
 │   ├── wintun.dll (только Windows) - автоматически скачивается через вкладку Core
-│   └── config.json - создать из config.json.example
+│   └── config.json - создать из config.example.json
 ├── logs/
 │   ├── singbox-launcher.log
 │   ├── sing-box.log

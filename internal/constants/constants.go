@@ -5,7 +5,7 @@ const (
 	WinTunDLLName     = "wintun.dll"
 	TunDLLName        = "tun.dll"
 	ConfigFileName    = "config.json"
-	ConfigExampleName = "config.json.example"
+	ConfigExampleName = "config.example.json"
 	SingBoxExecName   = "sing-box"
 	ParserExecName    = "parser"
 )

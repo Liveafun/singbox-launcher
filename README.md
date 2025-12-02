@@ -50,7 +50,7 @@ This launcher solves all of that. Everything is controlled from one clean GUI:
 
 **🔗 Links:**
 - **GitHub:** https://github.com/Leadaxe/singbox-launcher  
-- **Example config:** https://github.com/Leadaxe/singbox-launcher/blob/main/bin/config.json.example
+- **Example config:** https://github.com/Leadaxe/singbox-launcher/blob/main/bin/config.example.json
 
 ## 📋 Requirements
 
@@ -74,7 +74,7 @@ This launcher solves all of that. Everything is controlled from one clean GUI:
 1. Download the latest release from [GitHub Releases](https://github.com/Leadaxe/singbox-launcher/releases)
 2. Extract the archive to any folder (e.g., `C:\Program Files\singbox-launcher`)
 3. Place `config.json` in the `bin\` folder:
-   - Copy `config.json.example` to `config.json` and configure it
+   - Copy `config.example.json` to `config.json` and configure it
 4. Run `singbox-launcher.exe`
 5. **Automatic download** (recommended):
    - Go to the **"Core"** tab
@@ -163,7 +163,7 @@ singbox-launcher/
 ├── bin/
 │   ├── sing-box.exe (or sing-box for Unix) - auto-downloaded via Core tab
 │   ├── wintun.dll (Windows only) - auto-downloaded via Core tab
-│   └── config.json - create from config.json.example
+│   └── config.json - create from config.example.json
 ├── logs/
 │   ├── singbox-launcher.log
 │   ├── sing-box.log

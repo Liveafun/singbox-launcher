@@ -25,7 +25,7 @@ This release includes prebuilt `sing-box.exe` (Windows) / `sing-box` (macOS/Linu
 
 - Windows 10/11 (x64) / macOS 10.15+ / Linux (x64)
 - `wintun.dll` (Windows only) - can be downloaded from https://www.wintun.net/ or may be included in the release
-- `config.json` - copy from `config.json.example` and configure
+- `config.json` - copy from `config.example.json` and configure
 
 ### Links
 

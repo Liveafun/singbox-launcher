@@ -1044,6 +1044,24 @@ func (ac *AppController) GetVPNButtonState() VPNButtonState {
 	_, err := ac.GetInstalledCoreVersion()
 	binaryExists := err == nil
 
+	// Check if config.json exists
+	configExists := false
+	if _, err := os.Stat(ac.ConfigPath); err == nil {
+		configExists = true
+	}
+
+	// Check if wintun.dll exists (only on Windows)
+	wintunExists := true // Default to true for non-Windows
+	if runtime.GOOS == "windows" {
+		exists, err := ac.CheckWintunDLL()
+		if err != nil {
+			// Error checking - assume not available
+			wintunExists = false
+		} else {
+			wintunExists = exists
+		}
+	}
+
 	// Get current running state
 	isRunning := ac.RunningState.IsRunning()
 
@@ -1052,19 +1070,26 @@ func (ac *AppController) GetVPNButtonState() VPNButtonState {
 		IsRunning:    isRunning,
 	}
 
-	// Determine button states based on binary existence and running state
-	if binaryExists {
+	// Determine button states based on all requirements
+	// Start button is enabled only if:
+	// - sing-box binary exists
+	// - config.json exists
+	// - wintun.dll exists (on Windows)
+	// - VPN is not already running
+	allRequirementsMet := binaryExists && configExists && wintunExists
+
+	if allRequirementsMet {
 		if isRunning {
 			// VPN is running - Start disabled, Stop enabled
 			state.StartEnabled = false
 			state.StopEnabled = true
 		} else {
-			// VPN is not running - Start enabled, Stop disabled
+			// VPN is not running and all requirements met - Start enabled, Stop disabled
 			state.StartEnabled = true
 			state.StopEnabled = false
 		}
 	} else {
-		// File doesn't exist - both buttons disabled
+		// Requirements not met - both buttons disabled
 		state.StartEnabled = false
 		state.StopEnabled = false
 	}

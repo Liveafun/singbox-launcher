@@ -9,9 +9,11 @@ import (
 
 // App manages the UI structure and tabs
 type App struct {
-	window fyne.Window
-	core   *core.AppController
-	tabs   *container.AppTabs
+	window      fyne.Window
+	core        *core.AppController
+	tabs        *container.AppTabs
+	clashAPITab *container.TabItem
+	currentTab  *container.TabItem
 }
 
 // NewApp creates a new App instance
@@ -22,19 +24,48 @@ func NewApp(window fyne.Window, controller *core.AppController) *App {
 	}
 
 	// Create tabs - Core is first (opens on startup)
+	// Создаем вкладку Core первой, чтобы её callback установился
+	coreTabItem := container.NewTabItem("Core", CreateCoreDashboardTab(controller))
+	app.clashAPITab = container.NewTabItem("Clash API", CreateClashAPITab(controller))
 	app.tabs = container.NewAppTabs(
-		container.NewTabItem("Core", CreateCoreDashboardTab(controller)),
+		coreTabItem,
+		app.clashAPITab,
 		container.NewTabItem("Diagnostics", CreateDiagnosticsTab(controller)),
 		container.NewTabItem("Tools", CreateToolsTab(controller)),
-		container.NewTabItem("Clash API", CreateClashAPITab(controller)),
 	)
 
 	// Set tab selection handler
 	app.tabs.OnSelected = func(item *container.TabItem) {
-		if item.Text == "Clash API" {
+		app.currentTab = item
+		if item == app.clashAPITab {
+			// Проверяем, запущен ли sing-box
+			if !controller.RunningState.IsRunning() {
+				// Если не запущен, переключаем обратно на Core
+				app.tabs.Select(coreTabItem)
+				// Можно показать сообщение пользователю
+				return
+			}
 			controller.RefreshAPIFunc()
 		}
 	}
+
+	// Сохраняем оригинальный callback, который был установлен в CreateCoreDashboardTab
+	originalUpdateCoreStatusFunc := controller.UpdateCoreStatusFunc
+
+	// Регистрируем комбинированный callback для обновления состояния вкладки Clash API
+	controller.UpdateCoreStatusFunc = func() {
+		// Вызываем оригинальный callback, если он есть
+		if originalUpdateCoreStatusFunc != nil {
+			originalUpdateCoreStatusFunc()
+		}
+		// Обновляем состояние вкладки Clash API
+		fyne.Do(func() {
+			app.updateClashAPITabState()
+		})
+	}
+
+	// Инициализируем состояние вкладки
+	app.updateClashAPITabState()
 
 	return app
 }
@@ -52,4 +83,30 @@ func (a *App) GetWindow() fyne.Window {
 // GetController returns the core controller
 func (a *App) GetController() *core.AppController {
 	return a.core
+}
+
+// updateClashAPITabState обновляет состояние вкладки Clash API в зависимости от статуса запуска
+func (a *App) updateClashAPITabState() {
+	if a.clashAPITab == nil || a.tabs == nil {
+		return
+	}
+
+	isRunning := a.core.RunningState.IsRunning()
+
+	// Используем DisableItem/EnableItem из AppTabs для визуальной индикации неактивности
+	if !isRunning {
+		// Вкладка неактивна - отключаем её (будет показана серым цветом)
+		a.tabs.DisableItem(a.clashAPITab)
+	} else {
+		// Вкладка активна - включаем её
+		a.tabs.EnableItem(a.clashAPITab)
+	}
+
+	// Если sing-box не запущен и вкладка Clash API выбрана, переключаем на Core
+	if !isRunning && a.currentTab == a.clashAPITab {
+		if len(a.tabs.Items) > 0 {
+			coreTab := a.tabs.Items[0]
+			a.tabs.Select(coreTab)
+		}
+	}
 }

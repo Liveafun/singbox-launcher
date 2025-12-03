@@ -53,6 +53,13 @@ type WizardState struct {
 	SelectedFinalOutbound     string
 	previewNeedsParse         bool
 	autoParseInProgress       bool
+
+	// Navigation buttons
+	CloseButton      *widget.Button
+	NextButton       *widget.Button
+	SaveButton       *widget.Button
+	ButtonsContainer fyne.CanvasObject
+	tabs             *container.AppTabs
 }
 
 type SelectableRuleState struct {
@@ -118,44 +125,125 @@ func ShowConfigWizard(parent fyne.Window, controller *core.AppController) {
 	state.initializeTemplateState()
 
 	// Создаем контейнер с вкладками (пока только одна)
-	tabs := container.NewAppTabs(
-		container.NewTabItem("VLESS Sources & ParserConfig", tab1),
-	)
+	tab1Item := container.NewTabItem("VLESS Sources & ParserConfig", tab1)
+	tabs := container.NewAppTabs(tab1Item)
+	var rulesTabItem *container.TabItem
 	var previewTabItem *container.TabItem
+	var currentTabIndex int = 0
 	if templateTab := createTemplateTab(state); templateTab != nil {
-		rulesTab := container.NewTabItem("Rules", templateTab)
+		rulesTabItem = container.NewTabItem("Rules", templateTab)
 		previewTabItem = container.NewTabItem("Preview", createPreviewTab(state))
-		tabs.Append(rulesTab)
+		tabs.Append(rulesTabItem)
 		tabs.Append(previewTabItem)
 	}
-	if previewTabItem != nil {
-		tabs.OnChanged = func(item *container.TabItem) {
-			if item == previewTabItem {
-				state.triggerParseForPreview()
+
+	// Создаем кнопки навигации
+	state.CloseButton = widget.NewButton("Close", func() {
+		wizardWindow.Close()
+	})
+	state.CloseButton.Importance = widget.HighImportance
+
+	state.NextButton = widget.NewButton("Next", func() {
+		if currentTabIndex < len(tabs.Items)-1 {
+			currentTabIndex++
+			tabs.SelectTab(tabs.Items[currentTabIndex])
+		}
+	})
+	state.NextButton.Importance = widget.HighImportance
+
+	state.SaveButton = widget.NewButton("Save", func() {
+		if strings.TrimSpace(state.ParserConfigEntry.Text) == "" {
+			dialog.ShowError(fmt.Errorf("ParserConfig is empty"), state.Window)
+			return
+		}
+		if strings.TrimSpace(state.VLESSURLEntry.Text) == "" {
+			dialog.ShowError(fmt.Errorf("VLESS URL is empty"), state.Window)
+			return
+		}
+		if state.previewNeedsParse {
+			state.triggerParseForPreview()
+			dialog.ShowInformation("Parsing", "Parsing subscription... Please save once it completes.", state.Window)
+			return
+		}
+		if state.autoParseInProgress {
+			dialog.ShowInformation("Parsing", "Parsing in progress... Please wait.", state.Window)
+			return
+		}
+		text, err := buildTemplateConfig(state)
+		if err != nil {
+			dialog.ShowError(err, state.Window)
+			return
+		}
+		if path, err := state.saveConfigWithBackup(text); err != nil {
+			dialog.ShowError(err, state.Window)
+		} else {
+			dialog.ShowInformation("Config Saved", fmt.Sprintf("Config written to %s", path), state.Window)
+		}
+	})
+	state.SaveButton.Importance = widget.HighImportance
+
+	// Сохраняем ссылку на tabs в state
+	state.tabs = tabs
+
+	// Функция обновления кнопок в зависимости от вкладки
+	updateNavigationButtons := func() {
+		totalTabs := len(tabs.Items)
+		
+		var buttonsContent fyne.CanvasObject
+		if currentTabIndex == totalTabs-1 {
+			// Последняя вкладка (Preview): Close и Save
+			buttonsContent = container.NewHBox(
+				state.CloseButton,
+				layout.NewSpacer(),
+				state.SaveButton,
+			)
+		} else {
+			// Первые вкладки: Close слева, Next справа
+			buttonsContent = container.NewHBox(
+				state.CloseButton,
+				layout.NewSpacer(),
+				state.NextButton,
+			)
+		}
+		state.ButtonsContainer = buttonsContent
+	}
+
+	// Инициализируем контейнер кнопок
+	updateNavigationButtons()
+
+	// Обновляем кнопки при переключении вкладок
+	tabs.OnChanged = func(item *container.TabItem) {
+		// Обновляем индекс текущей вкладки
+		for i, tabItem := range tabs.Items {
+			if tabItem == item {
+				currentTabIndex = i
+				break
 			}
 		}
+		if item == previewTabItem {
+			state.triggerParseForPreview()
+		}
+		updateNavigationButtons()
+		// Обновляем Border контейнер с новыми кнопками
+		content := container.NewBorder(
+			nil,                    // top
+			state.ButtonsContainer, // bottom
+			nil,                    // left
+			nil,                    // right
+			tabs,                   // center
+		)
+		wizardWindow.SetContent(content)
 	}
 
 	// Обновляем предпросмотр после создания всех вкладок
 	state.updateTemplatePreview()
 
-	// Кнопки навигации (пока только Close, позже добавим Next)
-	closeButton := widget.NewButton("Close", func() {
-		wizardWindow.Close()
-	})
-	closeButton.Importance = widget.HighImportance
-
-	buttonsContainer := container.NewHBox(
-		widget.NewLabel(""), // Spacer
-		closeButton,
-	)
-
 	content := container.NewBorder(
-		nil,              // top
-		buttonsContainer, // bottom
-		nil,              // left
-		nil,              // right
-		tabs,             // center
+		nil,                    // top
+		state.ButtonsContainer, // bottom
+		nil,                    // left
+		nil,                    // right
+		tabs,                   // center
 	)
 
 	wizardWindow.SetContent(content)
@@ -428,40 +516,9 @@ func createPreviewTab(state *WizardState) fyne.CanvasObject {
 	}
 	previewScroll.SetMinSize(fyne.NewSize(0, maxHeight))
 
-	saveButton := widget.NewButton("Save", func() {
-		if strings.TrimSpace(state.ParserConfigEntry.Text) == "" {
-			dialog.ShowError(fmt.Errorf("ParserConfig is empty"), state.Window)
-			return
-		}
-		if strings.TrimSpace(state.VLESSURLEntry.Text) == "" {
-			dialog.ShowError(fmt.Errorf("VLESS URL is empty"), state.Window)
-			return
-		}
-		if state.previewNeedsParse {
-			state.triggerParseForPreview()
-			dialog.ShowInformation("Parsing", "Parsing subscription... Please save once it completes.", state.Window)
-			return
-		}
-		if state.autoParseInProgress {
-			dialog.ShowInformation("Parsing", "Parsing in progress... Please wait.", state.Window)
-			return
-		}
-		text, err := buildTemplateConfig(state)
-		if err != nil {
-			dialog.ShowError(err, state.Window)
-			return
-		}
-		if path, err := state.saveConfigWithBackup(text); err != nil {
-			dialog.ShowError(err, state.Window)
-		} else {
-			dialog.ShowInformation("Config Saved", fmt.Sprintf("Config written to %s", path), state.Window)
-		}
-	})
-
 	return container.NewVBox(
 		widget.NewLabel("Preview"),
 		previewScroll,
-		container.NewHBox(layout.NewSpacer(), saveButton),
 	)
 }
 

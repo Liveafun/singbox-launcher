@@ -40,6 +40,7 @@ type CoreDashboardTab struct {
 	configStatusLabel       *widget.Label
 	templateDownloadButton  *widget.Button
 	wizardButton            *widget.Button
+	updateConfigButton      *widget.Button
 
 	// Data
 	stopAutoUpdate           chan bool
@@ -88,7 +89,14 @@ func CreateCoreDashboardTab(ac *core.AppController) fyne.CanvasObject {
 	content := container.NewVBox(contentItems...)
 
 	// Регистрируем callback для обновления статуса при изменении RunningState
+	// Сохраняем оригинальный callback, если он есть
+	originalUpdateCoreStatusFunc := tab.controller.UpdateCoreStatusFunc
 	tab.controller.UpdateCoreStatusFunc = func() {
+		// Вызываем оригинальный callback, если он есть
+		if originalUpdateCoreStatusFunc != nil {
+			originalUpdateCoreStatusFunc()
+		}
+		// Вызываем наш callback
 		fyne.Do(func() {
 			tab.updateRunningStatus()
 		})
@@ -163,6 +171,12 @@ func (tab *CoreDashboardTab) createConfigBlock() fyne.CanvasObject {
 	tab.configStatusLabel = widget.NewLabel("Checking config...")
 	tab.configStatusLabel.Wrapping = fyne.TextWrapOff
 
+	// Кнопки будут внизу под статусом
+	tab.updateConfigButton = widget.NewButton("🔄 Update", func() {
+		tab.updateConfigInfo()
+	})
+	tab.updateConfigButton.Importance = widget.MediumImportance
+
 	tab.wizardButton = widget.NewButton("⚙️ Wizard", func() {
 		ShowConfigWizard(tab.controller.MainWindow, tab.controller)
 	})
@@ -173,17 +187,29 @@ func (tab *CoreDashboardTab) createConfigBlock() fyne.CanvasObject {
 	})
 	tab.templateDownloadButton.Importance = widget.MediumImportance
 
-	// Initially hide both, updateConfigInfo will show the appropriate one
+	// Initially hide wizard/download buttons, updateConfigInfo will show the appropriate one
 	tab.wizardButton.Hide()
 	tab.templateDownloadButton.Hide()
 
-	return container.NewHBox(
+	// Строка со статусом
+	statusRow := container.NewHBox(
 		title,
 		layout.NewSpacer(),
 		tab.configStatusLabel,
-		layout.NewSpacer(),
-		tab.wizardButton,
-		tab.templateDownloadButton,
+	)
+
+	// Кнопки под статусом (по центру)
+	buttonsRow := container.NewCenter(
+		container.NewHBox(
+			tab.updateConfigButton,
+			tab.wizardButton,
+			tab.templateDownloadButton,
+		),
+	)
+
+	return container.NewVBox(
+		statusRow,
+		buttonsRow,
 	)
 }
 
@@ -252,15 +278,19 @@ func (tab *CoreDashboardTab) updateRunningStatus() {
 	if tab.startButton != nil {
 		if buttonState.StartEnabled {
 			tab.startButton.Enable()
+			tab.startButton.Importance = widget.HighImportance // Синяя кнопка, когда доступна
 		} else {
 			tab.startButton.Disable()
+			tab.startButton.Importance = widget.MediumImportance // Обычная, когда недоступна
 		}
 	}
 	if tab.stopButton != nil {
 		if buttonState.StopEnabled {
 			tab.stopButton.Enable()
+			tab.stopButton.Importance = widget.HighImportance // Синяя кнопка, когда доступна
 		} else {
 			tab.stopButton.Disable()
+			tab.stopButton.Importance = widget.MediumImportance // Обычная, когда недоступна
 		}
 	}
 }
@@ -270,30 +300,60 @@ func (tab *CoreDashboardTab) updateConfigInfo() {
 		return
 	}
 	configPath := tab.controller.ConfigPath
+	configExists := false
 	if info, err := os.Stat(configPath); err == nil {
 		modTime := info.ModTime().Format("2006-01-02")
 		tab.configStatusLabel.SetText(fmt.Sprintf("%s ✅ %s", filepath.Base(configPath), modTime))
+		configExists = true
 	} else if os.IsNotExist(err) {
 		tab.configStatusLabel.SetText(fmt.Sprintf("%s ❌ not found", filepath.Base(configPath)))
+		configExists = false
 	} else {
 		tab.configStatusLabel.SetText(fmt.Sprintf("Config error: %v", err))
+		configExists = false
 	}
 
 	templatePath := filepath.Join(tab.controller.ExecDir, "bin", "config_template.json")
 	if _, err := os.Stat(templatePath); err != nil {
 		// Template not found - show download button, hide wizard
-		tab.templateDownloadButton.Show()
-		tab.templateDownloadButton.Enable()
+		if tab.templateDownloadButton != nil {
+			tab.templateDownloadButton.Show()
+			tab.templateDownloadButton.Enable()
+			// Если шаблона нет, делаем кнопку синей (HighImportance)
+			tab.templateDownloadButton.Importance = widget.HighImportance
+		}
 		if tab.wizardButton != nil {
 			tab.wizardButton.Hide()
 		}
+		if tab.updateConfigButton != nil {
+			tab.updateConfigButton.Disable()
+		}
 	} else {
 		// Template found - show wizard, hide download button
-		tab.templateDownloadButton.Hide()
+		if tab.templateDownloadButton != nil {
+			tab.templateDownloadButton.Hide()
+		}
 		if tab.wizardButton != nil {
 			tab.wizardButton.Show()
+			// Если конфига нет, делаем кнопку Wizard синей (HighImportance)
+			if !configExists {
+				tab.wizardButton.Importance = widget.HighImportance
+			} else {
+				tab.wizardButton.Importance = widget.MediumImportance
+			}
+		}
+		// Update кнопка активна только если конфиг существует
+		if tab.updateConfigButton != nil {
+			if configExists {
+				tab.updateConfigButton.Enable()
+			} else {
+				tab.updateConfigButton.Disable()
+			}
 		}
 	}
+
+	// Обновляем статус кнопок Start/Stop, так как они зависят от наличия конфига
+	tab.updateRunningStatus()
 }
 
 // updateVersionInfo обновляет информацию о версии (по аналогии с updateWintunStatus)
@@ -649,6 +709,9 @@ func (tab *CoreDashboardTab) updateWintunStatus() {
 		tab.wintunDownloadButton.SetText("Download wintun.dll")
 		tab.wintunDownloadButton.Importance = widget.HighImportance
 	}
+
+	// Обновляем статус кнопок Start/Stop, так как они зависят от наличия wintun.dll
+	tab.updateRunningStatus()
 }
 
 // handleWintunDownload обрабатывает нажатие на кнопку Download wintun.dll

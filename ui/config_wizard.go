@@ -1,10 +1,13 @@
 package ui
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"image/color"
@@ -37,7 +40,30 @@ type WizardState struct {
 	// Parsed data
 	ParserConfig       *core.ParserConfig
 	GeneratedOutbounds []string
+
+	// Template data for second tab
+	TemplateData              *TemplateData
+	TemplateSectionSelections map[string]bool
+	SelectableRuleStates      []*SelectableRuleState
+	TemplatePreviewEntry      *widget.Entry
+	TemplatePreviewText       string
+	templatePreviewUpdating   bool
+	FinalOutboundSelect       *widget.Select
+	SelectedFinalOutbound     string
 }
+
+type SelectableRuleState struct {
+	Rule             TemplateSelectableRule
+	Enabled          bool
+	SelectedOutbound string
+	OutboundSelect   *widget.Select
+}
+
+const (
+	defaultOutboundTag = "direct-out"
+	rejectActionName   = "reject"
+	rejectActionMethod = "drop"
+)
 
 // ShowConfigWizard открывает окно мастера конфигурации
 func ShowConfigWizard(parent fyne.Window, controller *core.AppController) {
@@ -51,20 +77,49 @@ func ShowConfigWizard(parent fyne.Window, controller *core.AppController) {
 	wizardWindow.CenterOnScreen()
 	state.Window = wizardWindow
 
+	if templateData, err := loadTemplateData(controller.ExecDir); err != nil {
+		log.Printf("ConfigWizard: failed to load config_template.json from %s: %v", filepath.Join(controller.ExecDir, "bin", "config_template.json"), err)
+		// Show error to user
+		dialog.ShowError(fmt.Errorf("Failed to load template file:\n%v\n\nPlease ensure bin/config_template.json exists and is valid.", err), wizardWindow)
+	} else {
+		state.TemplateData = templateData
+	}
+
 	// Создаем первую вкладку
 	tab1 := createVLESSSourceTab(state)
 
-	// Загружаем данные из существующего конфига
-	if err := loadConfigFromFile(state); err != nil {
+	loadedConfig, err := loadConfigFromFile(state)
+	if err != nil {
 		log.Printf("ConfigWizard: Failed to load config: %v", err)
 		// Показываем ошибку, но продолжаем работу с дефолтными значениями
 		dialog.ShowError(fmt.Errorf("Failed to load existing config: %w", err), wizardWindow)
 	}
+	if !loadedConfig {
+		if state.TemplateData != nil && state.TemplateData.ParserConfig != "" {
+			if state.ParserConfigEntry != nil {
+				state.ParserConfigEntry.SetText(state.TemplateData.ParserConfig)
+			}
+		} else {
+			// Нет конфига и нет шаблона - показываем ошибку и закрываем визард
+			dialog.ShowError(fmt.Errorf("No config found and template file (bin/config_template.json) is missing or invalid.\nPlease create config_template.json or ensure config.json exists."), wizardWindow)
+			wizardWindow.Close()
+			return
+		}
+	}
+
+	// Инициализируем состояние шаблона
+	state.initializeTemplateState()
 
 	// Создаем контейнер с вкладками (пока только одна)
 	tabs := container.NewAppTabs(
 		container.NewTabItem("VLESS Sources & ParserConfig", tab1),
 	)
+	if templateTab := createTemplateTab(state); templateTab != nil {
+		tabs.Append(container.NewTabItem("Rules & Templates", templateTab))
+	}
+
+	// Обновляем предпросмотр после создания всех вкладок
+	state.updateTemplatePreview()
 
 	// Кнопки навигации (пока только Close, позже добавим Next)
 	closeButton := widget.NewButton("Close", func() {
@@ -122,8 +177,10 @@ func createVLESSSourceTab(state *WizardState) fyne.CanvasObject {
 	state.ParserConfigEntry = widget.NewMultiLineEntry()
 	state.ParserConfigEntry.SetPlaceHolder("Enter ParserConfig JSON here...")
 	state.ParserConfigEntry.Wrapping = fyne.TextWrapOff
-	// Всегда начинаем с шаблона, чтобы поле не оставалось пустым при отсутствии конфигурации
-	state.ParserConfigEntry.SetText(defaultParserConfigTemplate)
+	state.ParserConfigEntry.OnChanged = func(string) {
+		state.updateTemplatePreview()
+		state.refreshOutboundOptions()
+	}
 
 	// Создаем фиктивный Rectangle для установки высоты через container.NewMax
 	parserHeightRect := canvas.NewRectangle(color.Transparent)
@@ -216,13 +273,154 @@ func createVLESSSourceTab(state *WizardState) fyne.CanvasObject {
 	return scrollContainer
 }
 
+func createTemplateTab(state *WizardState) fyne.CanvasObject {
+	if state.TemplateData == nil {
+		return container.NewVBox(
+			widget.NewLabel("Template file bin/config_template.json not found."),
+			widget.NewLabel("Create the template file to enable this tab."),
+		)
+	}
+
+	state.initializeTemplateState()
+
+	availableOutbounds := state.getAvailableOutbounds()
+	if len(availableOutbounds) == 0 {
+		availableOutbounds = []string{defaultOutboundTag, rejectActionName}
+	}
+
+	baseSectionsInfo := widget.NewLabel("Base sections are always included in the generated config.")
+
+	rulesBox := container.NewVBox()
+	if len(state.SelectableRuleStates) == 0 {
+		rulesBox.Add(widget.NewLabel("No selectable rules defined in template."))
+	} else {
+		for i := range state.SelectableRuleStates {
+			ruleState := state.SelectableRuleStates[i]
+			idx := i
+
+			// Only show outbound selector if rule has "outbound" field
+			var outboundSelect *widget.Select
+			var outboundRow fyne.CanvasObject
+			if ruleState.Rule.HasOutbound {
+				if ruleState.SelectedOutbound == "" {
+					if ruleState.Rule.DefaultOutbound != "" {
+						ruleState.SelectedOutbound = ruleState.Rule.DefaultOutbound
+					} else {
+						ruleState.SelectedOutbound = availableOutbounds[0]
+					}
+				}
+				outboundSelect = widget.NewSelect(availableOutbounds, func(value string) {
+					state.SelectableRuleStates[idx].SelectedOutbound = value
+					state.updateTemplatePreview()
+				})
+				outboundSelect.SetSelected(ruleState.SelectedOutbound)
+				if !ruleState.Enabled {
+					outboundSelect.Disable()
+				}
+				outboundRow = container.NewHBox(
+					widget.NewLabel("Outbound:"),
+					outboundSelect,
+				)
+			}
+			state.SelectableRuleStates[idx].OutboundSelect = outboundSelect
+
+			checkbox := widget.NewCheck(ruleState.Rule.Label, func(val bool) {
+				state.SelectableRuleStates[idx].Enabled = val
+				if outboundSelect != nil {
+					if val {
+						outboundSelect.Enable()
+					} else {
+						outboundSelect.Disable()
+					}
+				}
+				state.updateTemplatePreview()
+			})
+			checkbox.SetChecked(ruleState.Enabled)
+
+			// Create checkbox container with optional info button for description
+			checkboxContainer := container.NewHBox(checkbox)
+			if ruleState.Rule.Description != "" {
+				infoButton := widget.NewButton("?", func() {
+					dialog.ShowInformation(ruleState.Rule.Label, ruleState.Rule.Description, state.Window)
+				})
+				infoButton.Importance = widget.LowImportance
+				checkboxContainer.Add(infoButton)
+			}
+
+			rowContent := []fyne.CanvasObject{checkboxContainer, layout.NewSpacer()}
+			if outboundRow != nil {
+				rowContent = append(rowContent, outboundRow)
+			}
+			rulesBox.Add(container.NewHBox(rowContent...))
+		}
+	}
+
+	state.ensureFinalSelected(availableOutbounds)
+	finalSelect := widget.NewSelect(availableOutbounds, func(value string) {
+		state.SelectedFinalOutbound = value
+		state.updateTemplatePreview()
+	})
+	finalSelect.SetSelected(state.SelectedFinalOutbound)
+	state.FinalOutboundSelect = finalSelect
+	finalRow := container.NewHBox(
+		widget.NewLabel("Final outbound:"),
+		finalSelect,
+		layout.NewSpacer(),
+	)
+
+	state.TemplatePreviewEntry = widget.NewMultiLineEntry()
+	state.TemplatePreviewEntry.SetPlaceHolder("Preview will appear here")
+	state.TemplatePreviewEntry.Wrapping = fyne.TextWrapOff
+	state.TemplatePreviewEntry.OnChanged = func(text string) {
+		if state.templatePreviewUpdating {
+			return
+		}
+		state.setTemplatePreviewText(state.TemplatePreviewText)
+	}
+	previewHeightRect := canvas.NewRectangle(color.Transparent)
+	previewHeightRect.SetMinSize(fyne.NewSize(0, 260))
+	previewWithHeight := container.NewMax(
+		previewHeightRect,
+		state.TemplatePreviewEntry,
+	)
+	state.setTemplatePreviewText("Preview will appear here")
+	applyButton := widget.NewButton("Write config.json", func() {
+		text, err := buildTemplateConfig(state)
+		if err != nil {
+			dialog.ShowError(err, state.Window)
+			return
+		}
+		if err := os.WriteFile(state.Controller.ConfigPath, []byte(text), 0644); err != nil {
+			dialog.ShowError(err, state.Window)
+			return
+		}
+		dialog.ShowInformation("Template Applied", fmt.Sprintf("Config written to %s", state.Controller.ConfigPath), state.Window)
+	})
+
+	state.updateTemplatePreview()
+	state.refreshOutboundOptions()
+
+	return container.NewVBox(
+		widget.NewLabel("Base sections"),
+		baseSectionsInfo,
+		widget.NewSeparator(),
+		finalRow,
+		widget.NewSeparator(),
+		widget.NewLabel("Selectable rules"),
+		rulesBox,
+		widget.NewSeparator(),
+		container.NewHBox(layout.NewSpacer(), applyButton),
+		previewWithHeight,
+	)
+}
+
 // loadConfigFromFile загружает данные из существующего config.json
-func loadConfigFromFile(state *WizardState) error {
+func loadConfigFromFile(state *WizardState) (bool, error) {
 	// Проверяем наличие config.json
 	if _, err := os.Stat(state.Controller.ConfigPath); os.IsNotExist(err) {
 		// Конфиг не существует - оставляем значения по умолчанию
 		log.Println("ConfigWizard: config.json not found, using default values")
-		return nil
+		return false, nil
 	}
 
 	// Извлекаем ParserConfig
@@ -230,7 +428,7 @@ func loadConfigFromFile(state *WizardState) error {
 	if err != nil {
 		// Если не удалось извлечь - оставляем значения по умолчанию
 		log.Printf("ConfigWizard: Failed to extract ParserConfig: %v", err)
-		return nil // Не критическая ошибка
+		return false, nil // Не критическая ошибка
 	}
 
 	state.ParserConfig = parserConfig
@@ -243,13 +441,13 @@ func loadConfigFromFile(state *WizardState) error {
 	parserConfigJSON, err := serializeParserConfig(parserConfig)
 	if err != nil {
 		log.Printf("ConfigWizard: Failed to serialize ParserConfig: %v", err)
-		return err
+		return false, err
 	}
 
 	state.ParserConfigEntry.SetText(string(parserConfigJSON))
 
 	log.Println("ConfigWizard: Successfully loaded config from file")
-	return nil
+	return true, nil
 }
 
 // checkURL проверяет доступность URL подписки
@@ -258,7 +456,6 @@ func checkURL(state *WizardState) {
 	if url == "" {
 		fyne.Do(func() {
 			state.URLStatusLabel.SetText("❌ Please enter a URL")
-			state.URLStatusLabel.Importance = widget.DangerImportance
 		})
 		return
 	}
@@ -266,7 +463,6 @@ func checkURL(state *WizardState) {
 	// Обновляем UI
 	fyne.Do(func() {
 		state.URLStatusLabel.SetText("⏳ Checking...")
-		state.URLStatusLabel.Importance = widget.MediumImportance
 		state.CheckURLButton.Disable()
 	})
 
@@ -275,7 +471,6 @@ func checkURL(state *WizardState) {
 	if err != nil {
 		fyne.Do(func() {
 			state.URLStatusLabel.SetText(fmt.Sprintf("❌ Failed: %v", err))
-			state.URLStatusLabel.Importance = widget.DangerImportance
 			state.CheckURLButton.Enable()
 		})
 		return
@@ -296,7 +491,6 @@ func checkURL(state *WizardState) {
 	if validLines == 0 {
 		fyne.Do(func() {
 			state.URLStatusLabel.SetText("❌ URL is accessible but contains no valid proxy links")
-			state.URLStatusLabel.Importance = widget.DangerImportance
 			state.CheckURLButton.Enable()
 		})
 		return
@@ -304,7 +498,6 @@ func checkURL(state *WizardState) {
 
 	fyne.Do(func() {
 		state.URLStatusLabel.SetText(fmt.Sprintf("✅ Working! Found %d valid proxy link(s)", validLines))
-		state.URLStatusLabel.Importance = widget.SuccessImportance
 		state.CheckURLButton.Enable()
 		if len(previewLines) > 0 {
 			setPreviewText(state, strings.Join(previewLines, "\n"))
@@ -364,8 +557,6 @@ func parseAndPreview(state *WizardState) {
 		}
 	}
 
-	// Устанавливаем значение по умолчанию (из @ParcerConfig, если доступен)
-	state.ParserConfigEntry.SetText(defaultParserConfigTemplate)
 	// Загружаем подписку
 	fyne.Do(func() {
 		setPreviewText(state, "Downloading subscription...")
@@ -458,6 +649,7 @@ func parseAndPreview(state *WizardState) {
 		state.ParseButton.SetText("Parse")
 		state.GeneratedOutbounds = selectorsJSON
 		state.ParserConfig = &parserConfig
+		state.refreshOutboundOptions()
 	})
 }
 
@@ -466,6 +658,282 @@ func setPreviewText(state *WizardState, text string) {
 	if state.OutboundsPreview != nil {
 		state.OutboundsPreview.SetText(text)
 	}
+}
+
+func (state *WizardState) setTemplatePreviewText(text string) {
+	state.TemplatePreviewText = text
+	if state.TemplatePreviewEntry == nil {
+		return
+	}
+	state.templatePreviewUpdating = true
+	state.TemplatePreviewEntry.SetText(text)
+	state.templatePreviewUpdating = false
+}
+
+func (state *WizardState) refreshOutboundOptions() {
+	if len(state.SelectableRuleStates) == 0 && state.FinalOutboundSelect == nil {
+		return
+	}
+	options := state.getAvailableOutbounds()
+	if len(options) == 0 {
+		options = []string{defaultOutboundTag, rejectActionName}
+	}
+
+	ensureSelected := func(ruleState *SelectableRuleState) {
+		if !ruleState.Rule.HasOutbound {
+			return
+		}
+		if ruleState.SelectedOutbound != "" && containsString(options, ruleState.SelectedOutbound) {
+			return
+		}
+		candidate := ruleState.Rule.DefaultOutbound
+		if candidate == "" || !containsString(options, candidate) {
+			candidate = options[0]
+		}
+		ruleState.SelectedOutbound = candidate
+	}
+
+	state.ensureFinalSelected(options)
+
+	fyne.Do(func() {
+		for _, ruleState := range state.SelectableRuleStates {
+			if !ruleState.Rule.HasOutbound || ruleState.OutboundSelect == nil {
+				continue
+			}
+			ensureSelected(ruleState)
+			ruleState.OutboundSelect.Options = options
+			ruleState.OutboundSelect.SetSelected(ruleState.SelectedOutbound)
+			ruleState.OutboundSelect.Refresh()
+		}
+		if state.FinalOutboundSelect != nil {
+			state.FinalOutboundSelect.Options = options
+			state.FinalOutboundSelect.SetSelected(state.SelectedFinalOutbound)
+			state.FinalOutboundSelect.Refresh()
+		}
+	})
+}
+
+func (state *WizardState) updateTemplatePreview() {
+	if state.TemplateData == nil || state.TemplatePreviewEntry == nil {
+		return
+	}
+	text, err := buildTemplateConfig(state)
+	if err != nil {
+		state.setTemplatePreviewText(fmt.Sprintf("Preview error: %v", err))
+		return
+	}
+	state.setTemplatePreviewText(text)
+}
+
+func buildTemplateConfig(state *WizardState) (string, error) {
+	if state.TemplateData == nil {
+		return "", fmt.Errorf("template data not available")
+	}
+	parserConfig := strings.TrimSpace(state.ParserConfigEntry.Text)
+	if parserConfig == "" {
+		return "", fmt.Errorf("ParserConfig is empty and no template available")
+	}
+	sections := make([]string, 0)
+	for _, key := range state.TemplateData.SectionOrder {
+		if selected, ok := state.TemplateSectionSelections[key]; !ok || !selected {
+			continue
+		}
+		raw := state.TemplateData.Sections[key]
+		if key == "route" {
+			merged, err := mergeRouteSection(raw, state.SelectableRuleStates, state.SelectedFinalOutbound)
+			if err != nil {
+				return "", fmt.Errorf("route merge failed: %w", err)
+			}
+			raw = merged
+		}
+		formatted, err := formatSectionJSON(raw, 2)
+		if err != nil {
+			formatted = string(raw)
+		}
+		sections = append(sections, fmt.Sprintf(`  "%s": %s`, key, formatted))
+	}
+	if len(sections) == 0 {
+		return "", fmt.Errorf("no sections selected")
+	}
+	var builder strings.Builder
+	builder.WriteString("{\n")
+	builder.WriteString("/** @ParcerConfig\n")
+	builder.WriteString(parserConfig)
+	builder.WriteString("\n*/\n")
+	builder.WriteString(strings.Join(sections, ",\n"))
+	builder.WriteString("\n}\n")
+	result := builder.String()
+	result = strings.ReplaceAll(result, `"__PARSER_BLOCK__"`, "/** @ParserSTART */\n    /** @ParserEND */")
+	return result, nil
+}
+
+func mergeRouteSection(raw json.RawMessage, states []*SelectableRuleState, finalOutbound string) (json.RawMessage, error) {
+	var route map[string]interface{}
+	if err := json.Unmarshal(raw, &route); err != nil {
+		return nil, err
+	}
+	var rules []interface{}
+	if existing, ok := route["rules"]; ok {
+		if arr, ok := existing.([]interface{}); ok {
+			rules = arr
+		} else {
+			rules = []interface{}{existing}
+		}
+	}
+	for _, state := range states {
+		if !state.Enabled {
+			continue
+		}
+		cloned := cloneRule(state.Rule)
+		outbound := state.SelectedOutbound
+		if outbound == "" {
+			outbound = state.Rule.DefaultOutbound
+		}
+		if outbound != "" {
+			if outbound == rejectActionName {
+				delete(cloned, "outbound")
+				cloned["action"] = rejectActionName
+				cloned["method"] = rejectActionMethod
+			} else {
+				cloned["outbound"] = outbound
+				delete(cloned, "action")
+				delete(cloned, "method")
+			}
+		}
+		rules = append(rules, cloned)
+	}
+	if len(rules) > 0 {
+		route["rules"] = rules
+	}
+	if finalOutbound != "" {
+		route["final"] = finalOutbound
+	}
+	return json.Marshal(route)
+}
+
+func cloneRule(rule TemplateSelectableRule) map[string]interface{} {
+	cloned := make(map[string]interface{}, len(rule.Raw))
+	for key, value := range rule.Raw {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func (state *WizardState) ensureFinalSelected(options []string) {
+	if len(options) == 0 {
+		options = []string{defaultOutboundTag, rejectActionName}
+	}
+	preferred := state.SelectedFinalOutbound
+	if preferred == "" && state.TemplateData != nil && state.TemplateData.DefaultFinal != "" {
+		preferred = state.TemplateData.DefaultFinal
+	}
+	if preferred == "" {
+		preferred = defaultOutboundTag
+	}
+	if !containsString(options, preferred) {
+		if state.TemplateData != nil && state.TemplateData.DefaultFinal != "" && containsString(options, state.TemplateData.DefaultFinal) {
+			preferred = state.TemplateData.DefaultFinal
+		} else if containsString(options, defaultOutboundTag) {
+			preferred = defaultOutboundTag
+		} else {
+			preferred = options[0]
+		}
+	}
+	state.SelectedFinalOutbound = preferred
+}
+
+func formatSectionJSON(raw json.RawMessage, indentLevel int) (string, error) {
+	var buf bytes.Buffer
+	prefix := strings.Repeat(" ", indentLevel)
+	if err := json.Indent(&buf, raw, prefix, "  "); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+func (state *WizardState) initializeTemplateState() {
+	if state.TemplateData == nil {
+		return
+	}
+	if state.TemplateSectionSelections == nil {
+		state.TemplateSectionSelections = make(map[string]bool)
+	}
+	for _, key := range state.TemplateData.SectionOrder {
+		if _, ok := state.TemplateSectionSelections[key]; !ok {
+			state.TemplateSectionSelections[key] = true
+		}
+	}
+	options := state.getAvailableOutbounds()
+	if len(options) == 0 {
+		options = []string{defaultOutboundTag, rejectActionName}
+	}
+
+	if len(state.SelectableRuleStates) == 0 {
+		for _, rule := range state.TemplateData.SelectableRules {
+			outbound := rule.DefaultOutbound
+			if outbound == "" {
+				outbound = options[0]
+			}
+			state.SelectableRuleStates = append(state.SelectableRuleStates, &SelectableRuleState{
+				Rule:             rule,
+				SelectedOutbound: outbound,
+			})
+		}
+	} else {
+		for _, ruleState := range state.SelectableRuleStates {
+			if ruleState.SelectedOutbound == "" {
+				if ruleState.Rule.DefaultOutbound != "" {
+					ruleState.SelectedOutbound = ruleState.Rule.DefaultOutbound
+				} else {
+					ruleState.SelectedOutbound = options[0]
+				}
+			}
+		}
+	}
+
+	state.ensureFinalSelected(options)
+	// Не вызываем updateTemplatePreview здесь - он будет вызван после создания всех вкладок
+}
+
+func (state *WizardState) getAvailableOutbounds() []string {
+	tags := map[string]struct{}{
+		defaultOutboundTag: {},
+		rejectActionName:   {},
+	}
+	var parserCfg *core.ParserConfig
+	if state.ParserConfig != nil {
+		parserCfg = state.ParserConfig
+	} else if state.ParserConfigEntry != nil && state.ParserConfigEntry.Text != "" {
+		var parsed core.ParserConfig
+		if err := json.Unmarshal([]byte(state.ParserConfigEntry.Text), &parsed); err == nil {
+			parserCfg = &parsed
+		}
+	}
+	if parserCfg != nil {
+		for _, outbound := range parserCfg.ParserConfig.Outbounds {
+			if outbound.Tag != "" {
+				tags[outbound.Tag] = struct{}{}
+			}
+			for _, extra := range outbound.Outbounds.AddOutbounds {
+				tags[extra] = struct{}{}
+			}
+		}
+	}
+	result := make([]string, 0, len(tags))
+	for tag := range tags {
+		result = append(result, tag)
+	}
+	sort.Strings(result)
+	return result
 }
 
 // parseNodeFromString парсит узел из строки (обертка над core.ParseNode)
@@ -482,25 +950,6 @@ func generateNodeJSONForPreview(node *core.ParsedNode) (string, error) {
 func generateSelectorForPreview(allNodes []*core.ParsedNode, outboundConfig core.OutboundConfig) (string, error) {
 	return core.GenerateSelector(allNodes, outboundConfig)
 }
-
-const defaultParserConfigTemplate = `{
-  "version": 1,
-  "ParserConfig": {
-    "proxies": [{ "source": "https://USE_YOUR_SUBSCRIPTION_URL_HERE" }],
-    "outbounds": [
-      {
-        "tag": "proxy-out",
-        "type": "selector",
-        "options": { "interrupt_exist_connections": true },
-        "outbounds": {
-          "proxies": { "tag": "!/(DO_NOT_USE_THIS)/i" },
-          "addOutbounds": ["direct-out"]
-        },
-        "comment": "Proxy group for all connections"
-      }
-    ]
-  }
-}`
 
 func serializeParserConfig(parserConfig *core.ParserConfig) (string, error) {
 	if parserConfig == nil {
